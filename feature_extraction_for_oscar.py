@@ -188,7 +188,7 @@ def main():
     raw_height, raw_width, instances, features = extract_features(im)
     boxes=instances.pred_boxes.to_numpy()
     full_features=concat_feature_and_region(raw_height, raw_width, features, boxes)
-    # print('full_features.shape:', full_features.shape)
+    print('full_features.shape:', full_features.shape)
     write_features_tsv(f='features.tsv', image_id='000542', features=full_features)
     write_predictions_tsv(f='predictions.tsv', image_id='000542', features=full_features, instances=instances)
     quote_conversion('predictions.tsv')
