@@ -33,7 +33,6 @@ cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2
 cfg.MODEL.WEIGHTS = "http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe.pkl"
 predictor = DefaultPredictor(cfg)
 
-im = cv2.imread("data/images/input.jpg") # dim 3: h, w, color channel
 NUM_OBJECTS = 36
 
 def extract_features(raw_image):
@@ -96,45 +95,54 @@ def generate_lineidx_file(filein, idxout):
             fpos = tsvin.tell()
     os.rename(idxout_tmp, idxout)
 
-def write_features_tsv(f: str, image_id: str, features: np.array):
-    encoded_features=base64.b64encode(features).decode("utf-8")
-    num_boxes=features.shape[0]
-    row=[image_id, num_boxes, encoded_features]
+def write_features_tsv(f: str, image_ids: list, features: list):
+    assert len(image_ids)==len(features)
+    rows=list()
+    for i in range(len(image_ids)):
+        encoded_features=base64.b64encode(features[i]).decode("utf-8")
+        num_boxes=features[i].shape[0]
+        row=[image_ids[i], num_boxes, encoded_features]
+        rows.append(row)
+    
     with open(f, 'w') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
-        tsv_writer.writerow(row)
+        tsv_writer.writerows(rows)
     
     lineidx = op.splitext(f)[0] + '.lineidx'
     generate_lineidx_file(f, lineidx)
 
-def write_predictions_tsv(f: str, image_id: str, features: np.array, instances):
-    pred_boxes=instances.pred_boxes.tensor.detach().cpu().numpy().tolist()
-    classes=list()
-    for c in instances.pred_classes:
-        classes.append(vg_classes[c])
-    # print(instances.get_fields())
-    # print(instances)
-    num_instances=features.shape[0]
-    image_h=instances._image_size[0]
-    image_w=instances._image_size[1]
-    confidences=instances.scores
-    results=dict()
-    results["image_h"]=image_h
-    results["image_w"]=image_w
-    results["num_boxes"]=num_instances
-    objects=list()
-    for i in range(num_instances):
-        d=dict()
-        d["class"]=classes[i]
-        d["conf"]=confidences.detach().cpu().numpy()[i]
-        d["rect"]=pred_boxes[i]
-        objects.append(d)
-    results["objects"]=objects
-    row=[image_id, results]
+def write_predictions_tsv(f: str, image_ids: list, features: list, instances: list):
+    assert len(image_ids)==len(features)==len(instances)
+    rows=list()
+    for i in range(len(image_ids)):
+        pred_boxes=instances[i].pred_boxes.tensor.detach().cpu().numpy().tolist()
+        classes=list()
+        for c in instances[i].pred_classes:
+            classes.append(vg_classes[c])
+        # print(instances.get_fields())
+        # print(instances)
+        num_instances=features[i].shape[0]
+        image_h=instances[i]._image_size[0]
+        image_w=instances[i]._image_size[1]
+        confidences=instances[i].scores
+        results=dict()
+        results["image_h"]=image_h
+        results["image_w"]=image_w
+        results["num_boxes"]=num_instances
+        objects=list()
+        for j in range(num_instances):
+            d=dict()
+            d["class"]=classes[j]
+            d["conf"]=confidences.detach().cpu().numpy()[j]
+            d["rect"]=pred_boxes[j]
+            objects.append(d)
+        results["objects"]=objects
+        row=[image_ids[i], results]
+        rows.append(row)
 
     with open(f, 'w') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
-        tsv_writer.writerow(row)
+        tsv_writer.writerows(rows)
     
     lineidx = op.splitext(f)[0] + '.lineidx'
     generate_lineidx_file(f, lineidx)
@@ -151,11 +159,15 @@ def write_imageid2idx_json(f: str, image_ids: list):
     with open(f, 'w') as out_file:
         json.dump(d, out_file)
 
-def write_coco_tsv(f: str, img_info: str, label_info: str, caption: str):
-    row=[img_info, label_info, caption]
+def write_coco_tsv(f: str, img_infos: list, label_infos: list, captions: list):
+    assert len(img_infos)==len(label_infos)==len(captions)
+    rows=list()
+    for i in range(len(img_infos)):
+        row=[img_infos[i], label_infos[i], captions[i]]
+        rows.append(row)
     with open(f, 'w') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
-        tsv_writer.writerow(row)
+        tsv_writer.writerows(rows)
     
     lineidx = op.splitext(f)[0] + '.lineidx'
     generate_lineidx_file(f, lineidx)
@@ -185,16 +197,32 @@ def concat_feature_and_region(raw_height, raw_width, features, boxes):
     return full_features
 
 def main():
-    raw_height, raw_width, instances, features = extract_features(im)
-    boxes=instances.pred_boxes.to_numpy()
-    full_features=concat_feature_and_region(raw_height, raw_width, features, boxes)
-    print('full_features.shape:', full_features.shape)
-    write_features_tsv(f='features.tsv', image_id='000542', features=full_features)
-    write_predictions_tsv(f='predictions.tsv', image_id='000542', features=full_features, instances=instances)
+    data_dir='data/images'
+    images=[os.path.join(data_dir, f) for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+    # im = cv2.imread("data/images/input.jpg") # dim 3: h, w, color channel
+
+    image_ids=list()
+    all_instances=list()
+    all_full_features=list()
+    all_captions=list()
+
+    for image in images:
+        im=cv2.imread(image)
+        raw_height, raw_width, instances, features = extract_features(im)
+        boxes=instances.pred_boxes.to_numpy()
+        full_features=concat_feature_and_region(raw_height, raw_width, features, boxes)
+        
+        image_ids.append(os.path.basename(image))
+        all_instances.append(instances)
+        all_full_features.append(full_features)
+        all_captions.append('self-defined caption')
+    
+    write_features_tsv(f='features.tsv', image_ids=image_ids, features=all_full_features)
+    write_predictions_tsv(f='predictions.tsv', image_ids=image_ids, features=all_full_features, instances=all_instances)
     quote_conversion('predictions.tsv')
     # write_captions_pt(f='train_captions.pt', image_id='000542', captions=['a man in red is riding a horse'])
-    write_imageid2idx_json(f='imageid2idx.json', image_ids=["000542"])
-    write_coco_tsv(f='my_coco.tsv', img_info='coco_cap_000542', label_info='coco_cap_000542', caption='a man in red is riding a horse')
+    write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids)
+    write_coco_tsv(f='my_coco.tsv', img_infos=image_ids, label_infos=image_ids, captions=all_captions)
     print('writing done')
 
 if __name__=='__main__':
