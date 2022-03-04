@@ -7,6 +7,8 @@ import torch
 import csv
 import base64
 import json
+import urllib.request
+import shutil
 
 import detectron2
 from detectron2.engine import DefaultPredictor
@@ -15,6 +17,8 @@ from detectron2.utils.visualizer import Visualizer
 from detectron2.data import MetadataCatalog
 from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs, fast_rcnn_inference_single_image
+
+from load_images import get_images_info, get_image_captions
 
 # data_path = 'data/genome/1600-400-20'
 data_path ='data/coco'
@@ -198,6 +202,17 @@ def concat_feature_and_region(raw_height, raw_width, features, boxes):
     spatial_features=np.concatenate((scaled_x, scaled_y, scaled_x+scaled_width, scaled_y+scaled_heights, scaled_width, scaled_heights), axis=1)
     full_features=np.concatenate((features, spatial_features), axis=1)
     return full_features
+
+def get_img_from_url(image_infos: list, directory: str):
+    if not op.exists(directory):
+        os.mkdir(directory)
+    for image_info in image_infos:
+        url=image_info[0]
+        image_id=image_info[3]
+        urllib.request.urlretrieve(url=url, filename=op.join(directory, str(image_id)))
+
+def del_imgs(directory: str):
+    shutil.rmtree(directory)
 
 def main():
     data_dir='data/images'
