@@ -1,15 +1,9 @@
 from pycocotools.coco import COCO
 import json
+from tqdm import tqdm
+import os
 
-# training: 50000 from Train split
-# validation: 5000 from Validation split
-# test: 5000 from Train split
-
-TRAIN_NUM=50000
-VAL_NUM=5000
-TEST_NUM=5000
-
-def get_images_info(instance_file: str, num: int) -> list[list[str]]:
+def get_images_info(instance_file: str, num: int) -> list:
     with open(instance_file) as json_file:
         d=json.load(json_file)
     images=d['images']
@@ -23,32 +17,33 @@ def get_images_info(instance_file: str, num: int) -> list[list[str]]:
         i+=1
     return info # [[url, height, width, img_id]...]
 
-def get_image_captions(caption_file: str, image_infos: list, num: int) -> dict:
+def get_image_captions(caption_file: str, image_infos: list, num: int):
     coco_caps=COCO(caption_file)
     d_images=dict()
     i=0
-    for image_info in image_infos:
+    print('Loading image captions...')
+    for image_info in tqdm(image_infos):
         if i>=num:
             break
         img_id=image_info[3]
         d_images[img_id]=list()
         ann_ids=coco_caps.getAnnIds(img_id)
         anns=coco_caps.loadAnns(ann_ids)
-        for ann in anns:
-            ann.pop('image_id')
-            ann['caption_id']=ann['id']
-            ann.pop('id')
-            d_images[img_id].append(ann)
+        ann=anns[0]
+        ann.pop('image_id')
+        ann['caption_id']=ann['id']
+        ann.pop('id')
+        d_images[img_id].append(ann)
         i+=1
-    return d_images
+    f='image_'+os.path.basename(caption_file)
+    print('Writing to {}...'.format(f))
+    with open(f, 'w') as fp:
+        json.dump(d_images, fp)
 
 # def main():
-#     info=get_images_info('coco/coco-2017/instances_val2017.json', VAL_NUM)
-#     print(len(info))
-#     print(info[:10])
+#     info=get_images_info('coco/coco-2017/instances_train2017.json', 50000)
 
-#     d_images=get_image_captions('coco/coco-2017/captions_val2017.json', info, VAL_NUM)
-#     print(d_images)
+#     get_image_captions('coco/coco-2017/captions_train2017.json', info, 50000)
 
 # if __name__=='__main__':
 #     main()

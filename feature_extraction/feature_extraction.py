@@ -9,6 +9,7 @@ import base64
 import json
 import urllib.request
 import shutil
+from tqdm import tqdm
 
 import detectron2
 from detectron2.engine import DefaultPredictor
@@ -18,17 +19,23 @@ from detectron2.data import MetadataCatalog
 from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs, fast_rcnn_inference_single_image
 
-from load_images import get_images_info, get_image_captions
+from load_images import get_images_info
 
 # data_path = 'data/genome/1600-400-20'
 data_path ='data/coco'
 
-vg_classes=list()
-with open(os.path.join(data_path, 'objects_vocab.txt')) as f:
+coco_classes=list()
+with open(op.join(data_path, 'objects_vocab.txt')) as f:
     for object in f.readlines():
-        vg_classes.append(object.split(',')[0].lower().strip())
+        coco_classes.append(object.split(',')[0].lower().strip())
 
-MetadataCatalog.get("vg").thing_classes = vg_classes
+coco_classes_sv=list()
+with open(op.join(data_path, 'objects_vocab_sv.txt'), encoding='utf-8') as f:
+    for object in f.readlines():
+        coco_classes_sv.append(object.split(',')[0].lower().strip())
+
+# MetadataCatalog.get("vg").thing_classes = coco_classes
+MetadataCatalog.get("coco").thing_classes = coco_classes
 
 cfg=get_cfg()
 # cfg.merge_from_file("../configs/VG-Detection/faster_rcnn_R_101_C4_caffe.yaml")
@@ -121,11 +128,12 @@ def write_features_tsv(f: str, image_ids: list, features: list):
 def write_predictions_tsv(f: str, image_ids: list, features: list, instances: list):
     assert len(image_ids)==len(features)==len(instances)
     rows=list()
-    for i in range(len(image_ids)):
+    print('Writing to {}'.format(f))
+    for i in tqdm(range(len(image_ids))):
         pred_boxes=instances[i].pred_boxes.tensor.detach().cpu().numpy().tolist()
         classes=list()
         for c in instances[i].pred_classes:
-            classes.append(vg_classes[c])
+            classes.append(coco_classes_sv[c])
         # print(instances.get_fields())
         # print(instances)
         num_instances=features[i].shape[0]
@@ -166,12 +174,15 @@ def write_imageid2idx_json(f: str, image_ids: list):
     with open(f, 'w') as out_file:
         json.dump(d, out_file)
 
-def write_coco_tsv(f: str, img_infos: list, label_infos: list, captions: list):
-    assert len(img_infos)==len(label_infos)==len(captions)
+def write_coco_tsv(f: str, image_captions: dict, image_captions_sv: dict):
     rows=list()
-    for i in range(len(img_infos)):
-        row=[img_infos[i], label_infos[i], captions[i]]
-        rows.append(row)
+    for image_id in image_captions.keys():
+        captions=image_captions[image_id]
+        for caption in captions:
+            cap_id=str(caption['caption_id'])
+            cap=image_captions_sv[cap_id]
+            row=[image_id, cap]
+            rows.append(row)
     with open(f, 'w') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
         tsv_writer.writerows(rows)
@@ -203,45 +214,65 @@ def concat_feature_and_region(raw_height, raw_width, features, boxes):
     full_features=np.concatenate((features, spatial_features), axis=1)
     return full_features
 
-def get_img_from_url(image_infos: list, directory: str):
+def get_img_from_img_infos(image_infos: list, directory: str):
     if not op.exists(directory):
         os.mkdir(directory)
-    for image_info in image_infos:
-        url=image_info[0]
-        image_id=image_info[3]
-        urllib.request.urlretrieve(url=url, filename=op.join(directory, str(image_id)))
+        print('Getting images from web...')
+        for image_info in tqdm(image_infos):
+            url=image_info[0]
+            image_id=image_info[3]
+            try:
+                urllib.request.urlretrieve(url=url, filename=op.join(directory, str(image_id)+'.jpg'))
+            except:
+                print('Error occured during requesting {}'.format(image_id))
+                break
 
 def del_imgs(directory: str):
     shutil.rmtree(directory)
 
 def main():
-    data_dir='data/images'
-    images=[os.path.join(data_dir, f) for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+    # data_dir='data/images'
+    data_dir='data/coco_images'
+    TRAIN_NUM=50000
+    VAL_NUM=5000
+    TEST_NUM=5000
+
+    if not op.exists(data_dir):
+        val_img_infos=get_images_info(instance_file='coco/coco-2017/instances_val2017.json', num=VAL_NUM)
+        get_img_from_img_infos(image_infos=val_img_infos, directory=data_dir)
+    # captions=get_image_captions(caption_file='coco/coco-2017/captions_val2017.json', image_infos=val_img_infos, num=VAL_NUM)
+    with open('image_captions_val2017.json', 'r') as fp:
+        captions = json.load(fp)
+    with open('image_captions_val2017_sv.json', 'r', encoding='utf-8') as fp:
+        captions_sv=json.load(fp)
+
+    images=[op.join(data_dir, f) for f in os.listdir(data_dir) if op.isfile(op.join(data_dir, f))]
     # im = cv2.imread("data/images/input.jpg") # dim 3: h, w, color channel
 
     image_ids=list()
     all_instances=list()
     all_full_features=list()
-    all_captions=list()
 
-    for image in images:
+    print('Reading images from folder {}'.format(data_dir))
+    for image in tqdm(images):
         im=cv2.imread(image)
         raw_height, raw_width, instances, features = extract_features(im)
         boxes=instances.pred_boxes.to_numpy()
         full_features=concat_feature_and_region(raw_height, raw_width, features, boxes)
         
-        image_ids.append(os.path.basename(image))
+        image_ids.append(op.splitext(op.basename(image))[0])
         all_instances.append(instances)
         all_full_features.append(full_features)
-        all_captions.append('self-defined caption')
     
     write_features_tsv(f='features.tsv', image_ids=image_ids, features=all_full_features)
     write_predictions_tsv(f='predictions.tsv', image_ids=image_ids, features=all_full_features, instances=all_instances)
     quote_conversion('predictions.tsv')
     # write_captions_pt(f='train_captions.pt', image_id='000542', captions=['a man in red is riding a horse'])
     write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids)
-    write_coco_tsv(f='my_coco.tsv', img_infos=image_ids, label_infos=image_ids, captions=all_captions)
+    write_coco_tsv(f='my_coco.tsv', image_captions=captions, image_captions_sv=captions_sv)
     print('writing done')
+
+    # del_imgs(directory=data_dir)
 
 if __name__=='__main__':
     main()
