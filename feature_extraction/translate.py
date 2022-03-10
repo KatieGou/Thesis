@@ -88,9 +88,12 @@ def translate_objects(fin: str):
             fp.write('\n')
 
 def read_saved(fin: str):
-    with open(fin, 'r') as f:
-        d=json.load(f)
-    return len(d), d
+    try:
+        with open(fin, 'r') as f:
+            d=json.load(f)
+        return len(d), d
+    except FileNotFoundError:
+        return (0, {})
 
 def translate_captions(fin: str):
     """read from json file and translate captions into Swedish
@@ -107,7 +110,7 @@ def translate_captions(fin: str):
     fout=op.splitext(fin)[0]+'_sv'+op.splitext(fin)[1]
     
     i=0
-    all_i, all_captions=read_saved(fin='sample_data/image_captions_train2017_sv.json')
+    all_i, all_captions=read_saved(fin='sample_data/image_captions_test2017_sv.json')
     print('initial starting point:', all_i)
     for image_id in tqdm(image_ids[all_i:]):
         if i>=500:
@@ -136,7 +139,7 @@ def translate_captions(fin: str):
 
 def main():
     # translate_objects('objects_vocab.txt')
-    translate_captions(fin='sample_data/image_captions_train2017.json')
+    translate_captions(fin='sample_data/image_captions_test2017.json')
 
 if __name__=='__main__':
     main()

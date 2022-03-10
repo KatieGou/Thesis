@@ -221,11 +221,14 @@ def get_img_from_img_infos(image_infos: list, directory: str):
         for image_info in tqdm(image_infos):
             url=image_info[0]
             image_id=image_info[3]
-            try:
-                urllib.request.urlretrieve(url=url, filename=op.join(directory, str(image_id)+'.jpg'))
-            except:
-                print('Error occured during requesting {}'.format(image_id))
-                break
+            for i in range(5):
+                try:
+                    urllib.request.urlretrieve(url=url, filename=op.join(directory, str(image_id)+'.jpg'))
+                    break
+                except:
+                    pass
+            else:
+                raise ValueError("couldn't download image {} after {} times".format(image_id, i+1))
 
 def del_imgs(directory: str):
     shutil.rmtree(directory)
@@ -238,12 +241,12 @@ def main():
     TEST_NUM=5000
 
     if not op.exists(data_dir):
-        val_img_infos=get_images_info(instance_file='coco/coco-2017/instances_val2017.json', num=VAL_NUM)
-        get_img_from_img_infos(image_infos=val_img_infos, directory=data_dir)
+        train_img_infos=get_images_info(instance_file='coco/coco-2017/instances_train2017.json', num=TRAIN_NUM)
+        get_img_from_img_infos(image_infos=train_img_infos, directory=data_dir)
     # captions=get_image_captions(caption_file='coco/coco-2017/captions_val2017.json', image_infos=val_img_infos, num=VAL_NUM)
-    with open('image_captions_val2017.json', 'r') as fp:
+    with open('image_captions_train2017.json', 'r') as fp:
         captions = json.load(fp)
-    with open('image_captions_val2017_sv.json', 'r', encoding='utf-8') as fp:
+    with open('image_captions_train2017_sv.json', 'r', encoding='utf-8') as fp:
         captions_sv=json.load(fp)
 
     images=[op.join(data_dir, f) for f in os.listdir(data_dir) if op.isfile(op.join(data_dir, f))]
