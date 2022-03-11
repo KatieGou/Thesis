@@ -77,13 +77,13 @@ def get_test_image_captions(caption_file: str, image_infos: list, num: int):
     with open(f, 'w') as fp:
         json.dump(d_images, fp)
 
-def main():
-    # info=get_images_info('coco/coco-2017/instances_train2017.json', 50000)
+# def main():
+#     # info=get_images_info('coco/coco-2017/instances_train2017.json', 50000)
 
-    # get_image_captions('coco/coco-2017/captions_train2017.json', info, 50000)
+#     # get_image_captions('coco/coco-2017/captions_train2017.json', info, 50000)
 
-    info=get_test_images_info('coco/coco-2017/instances_train2017.json', 50000, 5000)
-    get_test_image_captions('coco/coco-2017/captions_train2017.json', info, 5000)
+#     info=get_test_images_info('coco/coco-2017/instances_train2017.json', 50000, 5000)
+#     get_test_image_captions('coco/coco-2017/captions_train2017.json', info, 5000)
 
-if __name__=='__main__':
-    main()
+# if __name__=='__main__':
+#     main()

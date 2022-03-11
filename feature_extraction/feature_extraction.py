@@ -19,7 +19,7 @@ from detectron2.data import MetadataCatalog
 from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs, fast_rcnn_inference_single_image
 
-from load_images import get_images_info
+from load_images import get_images_info, get_test_images_info
 
 # data_path = 'data/genome/1600-400-20'
 data_path ='data/coco'
@@ -235,18 +235,19 @@ def del_imgs(directory: str):
 
 def main():
     # data_dir='data/images'
-    data_dir='data/coco_images'
+    # data_dir='data/coco_images/train'
+    data_dir='data/coco_images/test'
     TRAIN_NUM=50000
     VAL_NUM=5000
     TEST_NUM=5000
 
     if not op.exists(data_dir):
-        train_img_infos=get_images_info(instance_file='coco/coco-2017/instances_train2017.json', num=TRAIN_NUM)
-        get_img_from_img_infos(image_infos=train_img_infos, directory=data_dir)
-    # captions=get_image_captions(caption_file='coco/coco-2017/captions_val2017.json', image_infos=val_img_infos, num=VAL_NUM)
-    with open('image_captions_train2017.json', 'r') as fp:
+        # test_img_infos=get_images_info(instance_file='coco/coco-2017/instances_test2017.json', num=TEST_NUM)
+        test_img_infos=get_test_images_info(instance_file='coco/coco-2017/instances_train2017.json', n_train=TRAIN_NUM, n_test=TEST_NUM)
+        get_img_from_img_infos(image_infos=test_img_infos, directory=data_dir)
+    with open('image_captions_test2017.json', 'r') as fp:
         captions = json.load(fp)
-    with open('image_captions_train2017_sv.json', 'r', encoding='utf-8') as fp:
+    with open('image_captions_test2017_sv.json', 'r', encoding='utf-8') as fp:
         captions_sv=json.load(fp)
 
     images=[op.join(data_dir, f) for f in os.listdir(data_dir) if op.isfile(op.join(data_dir, f))]
