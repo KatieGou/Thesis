@@ -1,0 +1,6 @@
+corpus: coco
+corpus_file: my_coco.tsv
+image_label_path:
+  coco: coco/val
+image_feature_path:
+  coco: coco/val

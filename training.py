@@ -17,12 +17,13 @@ from pytorch_transformers import AdamW, WarmupLinearSchedule
 from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
 from transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
 
-from datasets.build import make_data_loader
-from utils.misc import mkdir, get_rank
-from utils.metric_logger import TensorboardLogger
+from model.datasets.build import make_data_loader
+from model.utils.misc import mkdir, get_rank
+from model.utils.metric_logger import TensorboardLogger
 
 logger=logging.getLogger(__name__)
-ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
+# ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
+ALL_MODELS=('KB/bert-base-swedish-cased', )
 MODEL_CLASSES = {'bert': (BertConfig, BertImgForPreTraining, BertTokenizer),}
 
 def main():

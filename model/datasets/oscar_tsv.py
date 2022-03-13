@@ -9,8 +9,8 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from utils.tsv_file import TSVFile
-from utils.misc import load_from_yaml_file
+from model.utils.tsv_file import TSVFile
+from model.utils.misc import load_from_yaml_file
 
 class OscarTSVDataset(Dataset):
     def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35,
