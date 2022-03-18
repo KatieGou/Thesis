@@ -5,3 +5,4 @@ feature_extraction/__pycache__
 my_code.py
 test.*
 *.ipynb
+data/
