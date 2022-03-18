@@ -52,7 +52,7 @@ class OscarTSVDataset(Dataset):
 
         self.current_random_doc = 0
         self.num_docs = 0
-        self.sample_to_doc = []  # map sample index to doc and line
+        self.sample_to_doc = []  # map sample index to doc and line, [{doc_id: , line: }, ...]
 
         self.chunk_list = None
         if 0 <= args.chunk_start_id <= args.chunk_end_id and args.chunk_end_id >= 0:
@@ -72,7 +72,7 @@ class OscarTSVDataset(Dataset):
         logging.info('Info: loading img features using {} secs'.format(t_end - t_start))
 
         if on_memory:
-            self.all_docs = list()
+            self.all_docs = list() # [[img_id, texta, textb], ...]
             self.imgid2labels = dict()
             self.corpus_lines = 0
             max_tokens = 0
@@ -114,7 +114,9 @@ class OscarTSVDataset(Dataset):
                     textb = ' '.join([cur_d['class'] for cur_d in results["gt_objects"]])
                 else:
                     textb = ' '.join([cur_d['class'] for cur_d in objects])
-                assert len(textb) != 0, "Text_b is empty in {} : {}".format(dataset_name, row[1])
+                # assert len(textb) != 0, "Text_b is empty in {} : {}".format(dataset_name, row[1])
+                if len(textb)==0:
+                    textb='ingenting'
                 doc.append(textb)
 
                 # add to all_docs
@@ -299,7 +301,7 @@ class OscarTSVDataset(Dataset):
         if self.img_label_file is None:
             self.img_label_file=dict()
             for dataset_name in self.datasets_names:
-                img_label_file_path = os.path.join(self.image_label_path[dataset_name], 'predictions_gt.tsv')
+                img_label_file_path = os.path.join(self.image_label_path[dataset_name], 'predictions.tsv')
                 t_s = time.time()
                 self.img_label_file[dataset_name] = TSVFile(img_label_file_path)
                 t_e = time.time()

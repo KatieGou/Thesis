@@ -1,4 +1,3 @@
-from lib2to3.pgen2.tokenize import TokenError
 import os
 import logging
 import torch

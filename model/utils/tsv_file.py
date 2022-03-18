@@ -5,17 +5,17 @@ import os.path as op
 def generate_lineidx_file(filein, idxout):
     idxout_tmp = idxout + '.tmp'
     with open(filein, 'r') as tsvin, open(idxout_tmp,'w') as tsvout:
-        fsize = os.fstat(tsvin.fileno()).st_size
+        fsize = os.fstat(tsvin.fileno()).st_size # fileno(): returns the integer file descriptor
         fpos = 0
         while fpos!=fsize:
             tsvout.write(str(fpos)+"\n")
             tsvin.readline()
-            fpos = tsvin.tell()
+            fpos = tsvin.tell() # returns the current position of the file read/write pointer within the file
     os.rename(idxout_tmp, idxout)
 
 
 class TSVFile(object):
-    def __init__(self, tsv_file, generate_lineidx=False):
+    def __init__(self, tsv_file, generate_lineidx=True):
         self.tsv_file = tsv_file
         self.lineidx = op.splitext(tsv_file)[0] + '.lineidx'
         self._fp = None
@@ -49,7 +49,7 @@ class TSVFile(object):
         except:
             logging.info('{}-{}'.format(self.tsv_file, idx))
             raise
-        self._fp.seek(pos)
+        self._fp.seek(pos) # sets the file's current position at the offset pos
         return [s.strip() for s in self._fp.readline().split('\t')]
 
     def __getitem__(self, index):

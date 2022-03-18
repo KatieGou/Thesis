@@ -14,8 +14,9 @@ import torch
 sys.path.insert(0, '.')
 
 from pytorch_transformers import AdamW, WarmupLinearSchedule
-from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
-from transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
+# from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
+from model.modeling.modeling_bert import BertImgForPreTraining
+from pytorch_transformers import WEIGHTS_NAME, BertConfig,BertTokenizer
 
 from model.datasets.build import make_data_loader
 from model.utils.misc import mkdir, get_rank
