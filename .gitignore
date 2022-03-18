@@ -6,3 +6,4 @@ my_code.py
 test.*
 *.ipynb
 data/
+output/
