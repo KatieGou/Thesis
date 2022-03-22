@@ -160,10 +160,16 @@ def write_predictions_tsv(f: str, image_ids: list, features: list, instances: li
     lineidx = op.splitext(f)[0] + '.lineidx'
     generate_lineidx_file(f, lineidx)
 
-def write_captions_pt(f: str, image_id: str, captions: list):
+def write_captions_pt(fin: str, fout: str):
     d=dict()
-    d[image_id]=captions
-    torch.save(d, f=f)
+    with open(fin, 'r', encoding='utf-8') as tsv_file:
+        rows=tsv_file.readlines()
+    for row in rows:
+        row=row.split('\t')
+        img_id=row[0]
+        caption=row[1]
+        d[img_id]=caption
+    torch.save(d, f=fout)
 
 def write_imageid2idx_json(f: str, image_ids: list, mode: str):
     if mode=='a':
@@ -189,7 +195,7 @@ def write_coco_tsv(f: str, image_captions: dict, image_captions_sv: dict):
             cap=image_captions_sv[cap_id]
             row=[image_id, cap]
             rows.append(row)
-    with open(f, 'w') as out_file:
+    with open(f, 'w', newline='') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
         tsv_writer.writerows(rows)
     
@@ -299,7 +305,7 @@ def main():
     write_predictions_tsv(f='predictions.tsv', image_ids=image_ids, features=all_full_features, instances=all_instances, mode=mode)
     write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids, mode=mode)
     
-    # write_captions_pt(f='train_captions.pt', image_id='000542', captions=['a man in red is riding a horse'])
+    # write_captions_pt(fin='extracted_features/train/my_coco.tsv', fout='train_captions.pt')
     quote_conversion('predictions.tsv')    
     print('writing done')
 

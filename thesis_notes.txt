@@ -1,2 +1,20 @@
 training command:
-python -m torch.distributed.launch --nproc_per_node=1 training.py --use_b 1 --max_grad_norm 10.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --do_lower_case --learning_rate 5e-05  --warmup_steps 0 --do_train --max_seq_length 35 --on_memory --max_img_seq_length 50 --img_feature_dim 2054 --drop_out 0.1 --train_batch_size 32 --ckpt_period 5 --max_iters 20 --log_period 1 --data_dir data --dataset_file settings.yaml
+python -m torch.distributed.launch --nproc_per_node=1 training.py --use_b 1 --max_grad_norm 10.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --do_lower_case --learning_rate 5e-05  --warmup_steps 0 --do_train --max_seq_length 35 --on_memory --max_img_seq_length 50 --img_feature_dim 2054 --drop_out 0.1 --train_batch_size 16 --ckpt_period 100 --max_iters 2000 --log_period 20 --data_dir data --dataset_file settings.yaml
+
+modification of packages: 
+1. modeling_bert.py: added model and config
+BERT_PRETRAINED_MODEL_ARCHIVE_MAP={
+    'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/pytorch_model.bin"
+}
+BERT_PRETRAINED_CONFIG_ARCHIVE_MAP={
+    'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/config.json"
+}
+2. modeling_utils.py: print json objects
+# 3. modeling_utils.py: print model load
+4. modeling_utils.py: print init
+
+relation.py:
+train_captions.pt: {img_id: caption}
+
+training command:
+python relation.py --model_name_or_path output/checkpoint-0002000 --do_train --save_steps 5000 --add_od_labels

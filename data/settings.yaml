@@ -1,6 +1,6 @@
 corpus: coco
 corpus_file: my_coco.tsv
 image_label_path:
-  coco: coco/val
+  coco: coco/train
 image_feature_path:
-  coco: coco/val
+  coco: coco/train

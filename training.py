@@ -16,15 +16,15 @@ sys.path.insert(0, '.')
 from pytorch_transformers import AdamW, WarmupLinearSchedule
 # from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
 from model.modeling.modeling_bert import BertImgForPreTraining
-from pytorch_transformers import WEIGHTS_NAME, BertConfig,BertTokenizer
+from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
 
 from model.datasets.build import make_data_loader
 from model.utils.misc import mkdir, get_rank
 from model.utils.metric_logger import TensorboardLogger
 
 logger=logging.getLogger(__name__)
-# ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
-ALL_MODELS=('KB/bert-base-swedish-cased', )
+ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
+# ALL_MODELS=('KB/bert-base-swedish-cased', )
 MODEL_CLASSES = {'bert': (BertConfig, BertImgForPreTraining, BertTokenizer),}
 
 def main():
@@ -108,8 +108,10 @@ def main():
 
     # Setup logging
     logging.basicConfig(
-        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+        format='%(asctime)s - %(levelname)s - [%(name)s - %(filename)s:%(lineno)d] - %(message)s',
         datefmt='%m/%d/%Y %H:%M:%S',
+        # format='%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+        # datefmt='%Y-%m-%d:%H:%M:%S',
         level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN
     )
     logger.warning(
@@ -172,13 +174,7 @@ def main():
     config.num_contrast_classes = args.num_contrast_classes
 
     # Prepare model
-    load_num = 0
-    while load_num < 10:
-        try:
-            model = BertImgForPreTraining.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
-            break
-        except:
-            load_num += 1
+    model = BertImgForPreTraining.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
     
     # train from scratch
     if args.from_scratch:
