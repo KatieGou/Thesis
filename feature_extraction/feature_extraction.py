@@ -166,8 +166,8 @@ def write_captions_pt(fin: str, fout: str):
         rows=tsv_file.readlines()
     for row in rows:
         row=row.split('\t')
-        img_id=row[0]
-        caption=row[1]
+        img_id=int(row[0])
+        caption=row[1].strip()
         d[img_id]=caption
     torch.save(d, f=fout)
 

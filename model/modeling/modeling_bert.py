@@ -6,7 +6,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss, MSELoss
 from transformers import BertModel
-from pytorch_transformers.modeling_bert import BertEmbeddings,BertSelfAttention, BertAttention, BertEncoder, BertLayer, BertSelfOutput, BertIntermediate, BertOutput,BertPooler, BertLayerNorm, BertPreTrainedModel, BertPredictionHeadTransform, BertOnlyMLMHead, BertLMPredictionHead,BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP,load_tf_weights_in_bert
+from pytorch_transformers.modeling_bert import BertEmbeddings,BertSelfAttention, BertAttention, BertEncoder, BertLayer, BertSelfOutput, BertIntermediate, BertOutput,BertPooler, BertLayerNorm, BertPreTrainedModel, BertLMPredictionHead, BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP, load_tf_weights_in_bert
 # BERT_PRETRAINED_MODEL_ARCHIVE_MAP: need to add Swedish BERT
 from .modeling_utils import ImgPreTrainedModel
 
@@ -94,7 +94,7 @@ class CaptionBertLayer(BertLayer):
 
 class CaptionBertEncoder(BertEncoder):
     """
-    Modified from BertEncoder to add support for output_hidden_states.
+    Modified from BertEncoder to add support for encoder_history_states.
     """
     def __init__(self, config) -> None:
         super().__init__(config)
@@ -122,7 +122,7 @@ class CaptionBertEncoder(BertEncoder):
             outputs = outputs + (all_hidden_states,)
         if self.output_attentions:
             outputs = outputs + (all_attentions,)
-        return outputs
+        return outputs # (hidden_states, all_hidden_states(optional), all_attentions(optional))
 
 class BertImgModel(BertPreTrainedModel):
     """Expand from BertModel to handle image region features as input
@@ -213,7 +213,7 @@ class BertImgModel(BertPreTrainedModel):
         else:
             head_mask = [None] * self.config.num_hidden_layers
         
-        embedding_output = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids)
+        embedding_output = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids) # words_embeddings + position_embeddings + token_type_embeddings
         if encoder_history_states:
             assert img_feats is None, "Cannot take image features while using encoder history states"
         
@@ -239,13 +239,13 @@ class BertImgModel(BertPreTrainedModel):
             # concatenate two embeddings
             embedding_output = torch.cat((embedding_output, img_embedding_output), 1)
         
-        encoder_outputs = self.encoder(embedding_output, extended_attention_mask, head_mask=head_mask, encoder_history_states=encoder_history_states)
+        encoder_outputs = self.encoder(embedding_output, extended_attention_mask, head_mask=head_mask, encoder_history_states=encoder_history_states) # (hidden_states, all_hidden_states(optional), all_attentions(optional))
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
 
         # add hidden_states and attentions if they are here
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]
-        return outputs
+        return outputs # (sequence_output, pooled_output, all_hidden_states(optional), all_attentions(optional))
 
 def instance_bce_with_logits(logits, labels, reduction='mean'):
     assert logits.dim() == 2
@@ -308,22 +308,22 @@ class ImageBertForSequenceClassification(BertPreTrainedModel):
                     loss = loss_fct(reshaped_logits, labels.contiguous())
                 elif self.loss_type == 'bce':
                     loss = instance_bce_with_logits(logits, labels)
-                else: # retrieval
+                else: # retrieval, self.loss_type=sfmx
                     loss_fct = CrossEntropyLoss()
                     loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
             outputs=(loss, )+outputs
-        return outputs
+        return outputs # (loss, logits, all_hidden_states(optional), all_attentions(optional))
 
 class BertPreTrainingHeads(nn.Module):
     def __init__(self, config):
-        super(BertPreTrainingHeads, self).__init__()
+        super().__init__()
         self.predictions = BertLMPredictionHead(config)
         num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
         self.seq_relationship = nn.Linear(config.hidden_size, num_seq_relations)
 
     def forward(self, sequence_output, pooled_output):
-        prediction_scores = self.predictions(sequence_output)
-        seq_relationship_score = self.seq_relationship(pooled_output)
+        prediction_scores = self.predictions(sequence_output) # prediction_scores: gelu transform+layernorm
+        seq_relationship_score = self.seq_relationship(pooled_output) # applies a linear transformation to the incoming data
         return prediction_scores, seq_relationship_score
 
 class BertImgForPreTraining(ImgPreTrainedModel):
@@ -333,9 +333,7 @@ class BertImgForPreTraining(ImgPreTrainedModel):
     base_model_prefix = "bert"
 
     def __init__(self, config):
-        super(BertImgForPreTraining, self).__init__(config)
-
-        #self.bert = BertModel(config) # original BERT
+        super().__init__(config)
         self.bert = BertImgModel(config)
         self.cls = BertPreTrainingHeads(config)
         self.num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
@@ -347,10 +345,7 @@ class BertImgForPreTraining(ImgPreTrainedModel):
         """ Initialize the weights.
         """
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0,
-                                       std=self.config.initializer_range)
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
         elif isinstance(module, BertLayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
@@ -361,13 +356,10 @@ class BertImgForPreTraining(ImgPreTrainedModel):
         """ Make sure we are sharing the input and output embeddings.
             Export to TorchScript can't handle parameter sharing so we are cloning them instead.
         """
-        self._tie_or_clone_weights(self.cls.predictions.decoder,
-                                   self.bert.embeddings.word_embeddings)
+        self._tie_or_clone_weights(self.cls.predictions.decoder, self.bert.embeddings.word_embeddings)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None,
-            next_sentence_label=None, position_ids=None, head_mask=None, img_feats=None):
-        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids,
-                            attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats)
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None, next_sentence_label=None, position_ids=None, head_mask=None, img_feats=None):
+        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats)
 
         sequence_output, pooled_output = outputs[:2]
         prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)

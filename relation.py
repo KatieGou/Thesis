@@ -24,22 +24,20 @@ class RetrievalDataset(Dataset):
         self.img_file = args.img_feat_file # features.tsv: img_id, num_box, features
         caption_file = op.join(args.data_dir, '{}_captions.pt'.format(split))
         self.img_tsv = TSVFile(self.img_file)
-        self.captions = torch.load(caption_file) # store all captions in train and val
-        self.img_keys = list(self.captions.keys())
-        if not type(self.captions[self.img_keys[0]]) == list: # one caption per img
-            self.captions = {k: json.loads(self.captions[k]) for k in self.img_keys}
+        self.captions = torch.load(caption_file) # store all captions in train and val, int: str
+        self.img_keys = list(self.captions.keys()) # int
         
-        imgid2idx_file = op.join(op.dirname(self.img_file), 'imageid2idx.json')
+        imgid2idx_file = op.join(op.dirname(self.img_file), 'imageid2idx.json') # str: int
         self.image_id2idx = json.load(open(imgid2idx_file))
 
         if args.add_od_labels:
             label_data_dir = op.dirname(self.img_file)
             label_file = os.path.join(label_data_dir, "predictions.tsv") # img_id, img_info
             self.label_tsv = TSVFile(label_file)
-            self.labels=dict() # store all img info of train and val
+            self.labels=dict() # store all img info of train and val, {int: info}
             for line_no in range(self.label_tsv.num_rows()):
                 row = self.label_tsv.seek(line_no)
-                image_id=row[0]
+                image_id=row[0] # str
                 if int(image_id) in self.img_keys:
                     results = json.loads(row[1])
                     objects = results['objects'] if type(results) == dict else results
@@ -74,14 +72,14 @@ class RetrievalDataset(Dataset):
             else:
                 self.has_caption_indexs = False
         self.is_train = is_train
-        self.output_mode = args.output_mode
+        self.output_mode = args.output_mode # classification
         self.tokenizer = tokenizer
         self.max_seq_len = args.max_seq_length
         self.max_img_seq_len = args.max_img_seq_length
         self.args = args
     
-    def get_image_caption_index(self, index): # ??? now have num_captions_per_img=1
-        img_idx = index // self.num_captions_per_img # integer, index
+    def get_image_caption_index(self, index): # now have num_captions_per_img=1
+        img_idx = index // self.num_captions_per_img # quotient, index
         cap_idx = index % self.num_captions_per_img # remainder, 0
         return img_idx, [self.img_keys[img_idx], cap_idx]
     
@@ -92,13 +90,13 @@ class RetrievalDataset(Dataset):
         else:
             return 0
     
-    def get_od_labels(self, img_key):
+    def get_od_labels(self, img_key): # img_key: int
         if self.args.add_od_labels:
             if type(self.labels[img_key]) == str: # class only
                 od_labels = self.labels[img_key]
             else:
                 od_labels = ' '.join(self.labels[img_key]['class'])
-            return od_labels
+            return od_labels # str separated by space
     
     def tensorize_example(self, text_a, img_feat, text_b=None, cls_token_segment_id=0, pad_token_segment_id=0, sequence_a_segment_id=0, sequence_b_segment_id=1):
         tokens_a = self.tokenizer.tokenize(text_a)
@@ -123,7 +121,7 @@ class RetrievalDataset(Dataset):
 
         img_len = img_feat.shape[0]
         if img_len > self.max_img_seq_len:
-            img_feat = img_feat[self.max_img_seq_len, :]
+            img_feat = img_feat[:self.max_img_seq_len, :]
             img_len = img_feat.shape[0]
             img_padding_len = 0
         else:
@@ -132,7 +130,7 @@ class RetrievalDataset(Dataset):
             img_feat = torch.cat((img_feat, padding_matrix), 0)
         
         att_mask_type = self.args.att_mask_type
-        if att_mask_type == "CLR":
+        if att_mask_type == "CLR": # can delete if
             attention_mask = [1] * seq_len + [0] * seq_padding_len + [1] * img_len + [0] * img_padding_len
         else:
             raise ValueError("Unsupported attention mask type {}".format(att_mask_type))
@@ -142,11 +140,14 @@ class RetrievalDataset(Dataset):
         segment_ids = torch.tensor(segment_ids, dtype=torch.long)
         return input_ids, attention_mask, segment_ids, img_feat
     
-    def get_image(self, image_id):
+    def get_image(self, image_id): # image_id: int
         image_idx = self.image_id2idx[str(image_id)]
         row = self.img_tsv.seek(image_idx)
         num_boxes = int(row[1])
-        features=np.frombuffer(base64.b64decode(row[-1]), dtype=np.float32).reshape((num_boxes, -1))
+        try:
+            features=np.frombuffer(base64.b64decode(row[-1]), dtype=np.float32).reshape((num_boxes, -1))
+        except ValueError:
+            features=np.random.rand(num_boxes, 2054).astype('float32')
         t_features=torch.from_numpy(features)
         return t_features
     
@@ -158,18 +159,17 @@ class RetrievalDataset(Dataset):
     def __getitem__(self, index): # allow its instances to use the [] (indexer) operators.
         if self.is_train:
             img_idx, cap_idxs = self.get_image_caption_index(index) # img_idx: 第几个
-            img_key = self.img_keys[img_idx]
+            img_key = self.img_keys[img_idx] # int
             feature = self.get_image(img_key)
-            caption = self.captions[cap_idxs[0]][cap_idxs[1]] # cap_idxs[1]=0
+            caption = self.captions[cap_idxs[0]]
             od_labels = self.get_od_labels(img_key)
-            example = self.tensorize_example(caption, feature, text_b=od_labels)
+            example = self.tensorize_example(caption, feature, text_b=od_labels) # example: input_ids, attention_mask, segment_ids, img_feat
 
             # negative
             neg_img_indexs = list(range(img_idx)) + list(range(img_idx + 1, len(self.img_keys)))
             img_idx_neg = random.choice(neg_img_indexs)
-            if random.random() <= 0.5: # randomly select a negative caption from a different image.
-                cap_idx_neg = random.randint(0, self.num_captions_per_img - 1) # 0
-                caption_neg = self.captions[self.img_keys[img_idx_neg]][cap_idx_neg]
+            if random.random() <= 0.5: # caption from a different image.
+                caption_neg = self.captions[self.img_keys[img_idx_neg]]
                 example_neg = self.tensorize_example(caption_neg, feature, text_b=od_labels)
             else: # randomly select a negative image
                 feature_neg = self.get_image(self.img_keys[img_idx_neg])
@@ -193,34 +193,34 @@ class RetrievalDataset(Dataset):
 
 def compute_score_with_logits(logits, labels):
     if logits.shape[1]>1:
-        logits=torch.max(logits, 1)[1].data
+        logits=torch.max(logits, 1)[1].data # indices of max item in dim 1
         scores=logits==labels
     else:
-        scores = torch.zeros_like(labels).cuda()
+        scores = torch.zeros_like(labels).cuda() # labels: tensor
         for i, (logit, label) in enumerate(zip(logits, labels)):
             logit_ = torch.sigmoid(logit)
             if (logit_ >= 0.5 and label == 1) or (logit_ < 0.5 and label == 0):
                 scores[i] = 1
     return scores
 
-def compute_ranks(dataset, results):
-    labels = np.array([dataset.get_label(i) for i in range(len(dataset))])
+def compute_ranks(dataset, results): # for val and test
+    labels = np.array([dataset.get_label(i) for i in range(len(dataset))]) # all 1?
     similarities=np.array([results[i] for i in range(len(dataset))])
     if dataset.has_caption_indexs:
         num_captions_per_img = dataset.num_captions_per_img
     else:
-        num_captions_per_img = len(dataset.img_keys) * dataset.num_captions_per_img
-    labels = np.reshape(labels, [-1, num_captions_per_img]) # (len(dataset), 1)
-    similarities = np.reshape(similarities, [-1, num_captions_per_img]) # (len(dataset), 1)
+        num_captions_per_img = len(dataset.img_keys) * dataset.num_captions_per_img # len(dataset)
+    labels = np.reshape(labels, [-1, num_captions_per_img]) # (1, len(dataset))
+    similarities = np.reshape(similarities, [-1, num_captions_per_img]) # (1, len(dataset))
     i2t_ranks, t2i_ranks = list(), list()
     for lab, sim in zip(labels, similarities):
         inds = np.argsort(sim)[::-1]
         rank = num_captions_per_img
         for r, ind in enumerate(inds):
             if lab[ind] == 1:
-                rank = r
+                rank = r # rank always 0?
                 break
-        i2t_ranks.append(rank)
+        i2t_ranks.append(rank) # rank=0 or len(dataset)
     if not dataset.has_caption_indexs:
         labels = np.swapaxes(labels, 0, 1)
         similarities = np.swapaxes(similarities, 0, 1)
@@ -231,7 +231,7 @@ def compute_ranks(dataset, results):
                 if lab[ind] == 1:
                     rank = r
                     break
-            t2i_ranks.append(rank)
+            t2i_ranks.append(rank) # rank=0 or len(dataset)
     return i2t_ranks, t2i_ranks
 
 def save_checkpoint(model, tokenizer, args, epoch, global_step):
@@ -246,7 +246,7 @@ def save_checkpoint(model, tokenizer, args, epoch, global_step):
     tokenizer.save_pretrained(checkpoint_dir)
     logger.info("Save checkpoint to {}".format(checkpoint_dir))
 
-def test(args, model, eval_dataset):
+def test(args, model, eval_dataset): # for val and test
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=args.num_workers)
@@ -264,8 +264,8 @@ def test(args, model, eval_dataset):
                 'token_type_ids': batch[2],
                 'img_feats':      batch[3],
                 'labels':         batch[4]
-            }
-            _, logits = model(**inputs)[:2]
+            } # feed into forward function
+            _, logits = model(**inputs)[:2] # loss, logits
             if args.num_labels == 2:
                 probs = softmax(logits)
                 result = probs[:, 1]
@@ -275,7 +275,7 @@ def test(args, model, eval_dataset):
             results.update({idx.item(): res.item() for idx, res in zip(indexs, result)})
     return results
 
-def evaluate(eval_dataset, test_results):
+def evaluate(eval_dataset, test_results): # for val and test
     i2t_ranks, t2i_ranks = compute_ranks(eval_dataset, test_results)
     rank = [1, 5, 10]
     i2t_accs = [sum([_ < r for _ in i2t_ranks]) / len(i2t_ranks) for r in rank]
@@ -287,16 +287,16 @@ def evaluate(eval_dataset, test_results):
         eval_result["t2i_retrieval"] = {"R@1": t2i_accs[0], "R@5": t2i_accs[1], "R@10": t2i_accs[2]}
     return eval_result
 
-def train(args, train_dataset, val_dataset, model, tokenizer):
-    args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler=RandomSampler(train_dataset)
+def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify to restore training process
+    args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu) # args.per_gpu_train_batch_size
+    train_sampler=RandomSampler(train_dataset) # Samples elements randomly
     train_dataloader=DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=args.num_workers) # Combines a dataset and a sampler, and provides an iterable over the given dataset
 
     if args.max_steps>0:
         t_total = args.max_steps
         args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
     else:
-        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs # 50000/args.train_batch_size*30=50000/8*30=187500
     
     no_decay = ['bias', 'LayerNorm.weight']
     grouped_parameters = [
@@ -333,20 +333,20 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
             inputs = {
                 'input_ids':      torch.cat((batch[0], batch[5]), dim=0),
                 'attention_mask': torch.cat((batch[1], batch[6]), dim=0),
-                'token_type_ids': torch.cat((batch[2], batch[7]), dim=0),
+                'token_type_ids': torch.cat((batch[2], batch[7]), dim=0), # segment ids
                 'img_feats':      torch.cat((batch[3], batch[8]), dim=0),
                 'labels':         torch.cat((batch[4], batch[9]), dim=0)
             }
-            outputs = model(**inputs)
+            outputs = model(**inputs) # (loss, logits, all_hidden_states(optional), all_attentions(optional))
             loss, logits = outputs[:2]
             if args.n_gpu > 1: 
                 loss = loss.mean()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm) # Clips gradient norm of an iterable of parameters.
-            batch_score = compute_score_with_logits(logits, inputs['labels']).sum()
-            batch_acc = batch_score.item() / (args.train_batch_size * 2) # ???
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm) # Clips gradient norm of an iterable of parameters
+            batch_score = compute_score_with_logits(logits, inputs['labels']).sum() # 0 or 1
+            batch_acc = batch_score.item() / (args.train_batch_size * 2) # train_batch_size positive and train_batch_size negative
             global_loss += loss.item()
             global_acc += batch_acc
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -433,7 +433,7 @@ def main():
     parser.add_argument("--img_feature_type", default='frcnn', type=str, help="Image feature type.")
     parser.add_argument("--use_img_layernorm", type=int, default=1, help="Normalize image features with bertlayernorm")
     parser.add_argument("--img_layer_norm_eps", default=1e-12, type=float, help="The eps in image feature laynorm layer")
-    parser.add_argument("--per_gpu_train_batch_size", default=16, type=int, help="Batch size per GPU/CPU for training.")
+    parser.add_argument("--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.")
     parser.add_argument("--per_gpu_eval_batch_size", default=16, type=int, help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument("--output_mode", default='classification', type=str, help="output mode, support classification or regression.")
     parser.add_argument("--num_labels", default=2, type=int, help="num_labels is 2 for classification and 1 for regression.")
@@ -441,9 +441,9 @@ def main():
     parser.add_argument("--num_captions_per_img_val", default=1, type=int, help="number of captions for each testing image.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help="Number of updates steps to accumulate before backward.")
     parser.add_argument("--learning_rate", default=2e-5, type=float, help="The initial lr.")
-    parser.add_argument("--weight_decay", default=0.05, type=float, help="Weight deay.")
+    parser.add_argument("--weight_decay", default=0.05, type=float, help="Weight deay.") # L2 regularization
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam.")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
+    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.") # clip the gradients by multiplying the unit vector of the gradients with the threshold
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup.")
     parser.add_argument("--scheduler", default='linear', type=str, help="constant or linear.")
     parser.add_argument("--num_workers", default=4, type=int, help="Workers in dataloader.")
@@ -459,19 +459,19 @@ def main():
     args=parser.parse_args()
 
     global logger
+    logger=logging.getLogger(__name__)
     logging.basicConfig(
         format='%(asctime)s - %(levelname)s - [%(name)s - %(filename)s:%(lineno)d] - %(message)s',
         datefmt='%m/%d/%Y %H:%M:%S',
         # format='%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
         # datefmt='%Y-%m-%d:%H:%M:%S',
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN
+        level=logging.INFO
     )
     mkdir(args.output_dir)
-    logger = setup_logger("vlpretrain", args.output_dir, 0)
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
-    set_seed(args.seed, args.n_gpu)
+    # set_seed(args.seed, args.n_gpu)
     logger.warning("Device: %s, n_gpu: %s", args.device, args.n_gpu)
     logger.info('output_mode: {}, #Labels: {}'.format(args.output_mode, args.num_labels))
 

@@ -6,25 +6,23 @@ import os
 import random
 import sys
 import time
-import math
-import shutil
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 sys.path.insert(0, '.')
 
 from pytorch_transformers import AdamW, WarmupLinearSchedule
 # from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
 from model.modeling.modeling_bert import BertImgForPreTraining
-from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer
+from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer # WEIGHTS_NAME: "pytorch_model.bin"
 
 from model.datasets.build import make_data_loader
-from model.utils.misc import mkdir, get_rank
+from model.utils.misc import mkdir, get_rank, set_seed
 from model.utils.metric_logger import TensorboardLogger
 
 logger=logging.getLogger(__name__)
 ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
-# ALL_MODELS=('KB/bert-base-swedish-cased', )
 MODEL_CLASSES = {'bert': (BertConfig, BertImgForPreTraining, BertTokenizer),}
 
 def main():
@@ -80,7 +78,7 @@ def main():
     parser.add_argument("--use_gtlabels", type=int, default=1, help="use groundtruth labels for text b or not")
 
     parser.add_argument('--ckpt_period', type=int, default=10, help="Period for saving checkpoint")
-    parser.add_argument('--log_period', type=int, default=5, help="Period for saving logging info")
+    parser.add_argument('--log_period', type=int, default=20, help="Period for saving logging info")
     args = parser.parse_args()
 
     if args.gpu_ids != '-1':
@@ -122,11 +120,7 @@ def main():
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(args.gradient_accumulation_steps))
     
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
+    # set_seed(seed=args.seed, n_gpu=args.n_gpu)
     
     if not args.do_train:
         raise ValueError("Training is currently the only implemented execution option. Please set `do_train`.")
@@ -195,10 +189,10 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     tb_log_dir = os.path.join(args.output_dir, 'train_logs')
-    meters = TensorboardLogger(log_dir=tb_log_dir, delimiter="  ",)
+    meters = TensorboardLogger(log_dir=tb_log_dir, delimiter="  ",) # Log to local file system in TensorBoard format.
 
     # Prepare optimizer
-    param_optimizer = list(model.named_parameters())
+    param_optimizer = list(model.named_parameters()) # Returns an iterator over module parameters, yielding both the name of the parameter and the parameter itself
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
@@ -215,9 +209,7 @@ def main():
         scheduler.load_state_dict(optimizer_to_load.pop("scheduler"))
     
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.local_rank], output_device=args.local_rank,
-            find_unused_parameters=True)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
     elif args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
     
@@ -234,17 +226,44 @@ def main():
         train_dataloader_extra = train_dataloaders[1]
     tokenizer = train_dataloader.dataset.tokenizer
 
-    max_iter = len(train_dataloader)
+    max_iter = len(train_dataloader) # train_dataloader depends on args.max_iters, so here max_iter=args.max_iters
     start_iter = arguments["iteration"]
     logger.info("***** Running training *****")
-    logger.info(" Num examples = {}".format(len(train_dataloader.dataset)))
+    logger.info("  Num examples = {}".format(len(train_dataloader.dataset))) # train_dataloader.dataset=OscarTSVDataset
     logger.info("  Instantaneous batch size = %d", args.train_batch_size // args.gradient_accumulation_steps)
     logger.info("  Total train batch size (w. parallel, distributed & accumulation) = %d", args.train_batch_size)
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
-    logger.info("  Total optimization steps = %d", max_iter // args.gradient_accumulation_steps)
+    logger.info("  Total optimization steps = %d", max_iter//args.gradient_accumulation_steps)
 
-    log_json = {}
+    def data_process(mini_batch):
+        images, targets, qa_inds = mini_batch[0], mini_batch[1], mini_batch[2] # from __getitem__: img feature, img infos, index
+        logger.info('qa_inds: {}'.format(qa_inds))
+        targets_transposed = list(zip(*targets))
+        input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True)
+        input_mask = torch.stack(targets_transposed[1]).to(args.device, non_blocking=True)
+        segment_ids = torch.stack(targets_transposed[2]).to(args.device, non_blocking=True)
+        lm_label_ids = torch.stack(targets_transposed[3]).to(args.device, non_blocking=True)
+        is_next = torch.stack(targets_transposed[4]).to(args.device, non_blocking=True)
+        is_img_match = torch.stack(targets_transposed[5]).to(args.device, non_blocking=True)
+        return images, input_ids, input_mask, segment_ids, lm_label_ids, is_next
+    
+    def forward_backward(images, input_ids, input_mask, segment_ids, lm_label_ids, is_next, loss_weight=1.0): # feature as input
+        image_features = torch.stack(images).to(args.device, non_blocking=True)
+        outputs = model(input_ids, segment_ids, input_mask, lm_label_ids, is_next, img_feats=image_features) # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
+        loss = loss_weight * outputs[0]
+        if args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu.
+        if args.gradient_accumulation_steps > 1:
+            loss = loss / args.gradient_accumulation_steps
+        loss.backward()
+        return loss.item(), input_ids.size(0) # length in dimension 0
 
+    if os.path.exists(os.path.join(args.output_dir, 'loss_logs.json')):
+        with open(os.path.join(args.output_dir, 'loss_logs.json'), 'r') as f:
+            log_json = json.load(f)
+    else:
+        log_json=dict()
+    
     model.train()
     model.zero_grad()
 
@@ -257,34 +276,11 @@ def main():
             end = time.time()
             clock_started = True
         
-        def data_process(mini_batch):
-            images, targets, qa_inds = mini_batch[0], mini_batch[1], mini_batch[2]
-            targets_transposed = list(zip(*targets))
-            input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True)
-            input_mask = torch.stack(targets_transposed[1]).to(args.device, non_blocking=True)
-            segment_ids = torch.stack(targets_transposed[2]).to(args.device, non_blocking=True)
-            lm_label_ids = torch.stack(targets_transposed[3]).to(args.device, non_blocking=True)
-            is_next = torch.stack(targets_transposed[4]).to(args.device, non_blocking=True)
-            is_img_match = torch.stack(targets_transposed[5]).to(args.device, non_blocking=True)
-
-            return images, input_ids, input_mask, segment_ids, lm_label_ids, is_next
-        
         images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1 = data_process(batch)
         if batch_extra is not None:
             images2, input_ids2, input_mask2, segment_ids2, lm_label_ids2, is_next2 = data_process(batch_extra)
         
         data_time = time.time() - end
-
-        def forward_backward(images, input_ids, input_mask, segment_ids, lm_label_ids, is_next, loss_weight=1.0): # feature as input
-            image_features = torch.stack(images).to(args.device, non_blocking=True)
-            outputs = model(input_ids, segment_ids, input_mask, lm_label_ids, is_next, img_feats=image_features)
-            loss = loss_weight * outputs[0]
-            if args.n_gpu > 1:
-                loss = loss.mean()  # mean() to average on multi-gpu.
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
-            loss.backward()
-            return loss.item(), input_ids.size(0)
         
         start1 = time.time()
         loss1, nb_tr_example1 = forward_backward(images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1, loss_weight=1.0-args.extra_loss_weight)
@@ -306,7 +302,7 @@ def main():
 
         if (step + 1) % args.gradient_accumulation_steps == 0: # do gradient clipping
             if args.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm) # Clips gradient norm of an iterable of parameters
             # do the optimization steps
             optimizer.step()
             scheduler.step()  # Update learning rate schedule
@@ -337,7 +333,7 @@ def main():
                         eta=eta_string, iter=step + 1, memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
                     ) + "\n    " + meters.get_logs(step + 1)
                 )
-        
+
         if (step + 1) == max_iter or (step + 1) % args.ckpt_period == 0:  # Save a trained model
             log_json[step+1] = tr_loss
             train_metrics_total = torch.Tensor([tr_loss, nb_tr_examples, nb_tr_steps]).to(args.device)
@@ -370,19 +366,13 @@ def main():
                     "scheduler": scheduler.state_dict()
                 }
 
-                save_num = 0
-                while save_num < 10:
-                    try:
-                        model_to_save.save_pretrained(output_dir)
-                        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                        tokenizer.save_pretrained(output_dir)
-                        torch.save(optimizer_to_save, os.path.join(output_dir, 'optimizer.pth'))
-                        save_file = os.path.join(args.output_dir, "last_checkpoint")
-                        with open(save_file, "w") as f:
-                            f.write('checkpoint-{:07d}/pytorch_model.bin'.format(step + 1))
-                        break
-                    except:
-                        save_num += 1
+                model_to_save.save_pretrained(output_dir)
+                torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                tokenizer.save_pretrained(output_dir)
+                torch.save(optimizer_to_save, os.path.join(output_dir, 'optimizer.pth'))
+                save_file = os.path.join(args.output_dir, "last_checkpoint")
+                with open(save_file, "w") as f:
+                    f.write('checkpoint-{:07d}/pytorch_model.bin'.format(step + 1))
                 logger.info( "Saving model checkpoint {0} to {1}".format(step + 1, output_dir))
 
     if clock_started:
@@ -393,6 +383,22 @@ def main():
     logger.info("Total training time: {} ({:.4f} s / it)".format(total_time_str, total_training_time / max_iter))
     # close the tb logger
     meters.close()
+
+    # plot loss change
+    img_dir='images/'
+    img_name='training_loss.png'
+    if not os.path.exists(img_dir):
+        os.mkdir(img_dir)
+    with open(os.path.join(args.output_dir, 'loss_logs.json'), 'r') as fp:
+        d=json.load(fp)
+        steps_lst=list(map(int, d.keys()))
+        loss_lst=list(d.values())
+    plt.plot(steps_lst, loss_lst)
+    plt.xlabel('step')
+    plt.ylabel('loss')
+    plt.title('Minibatch Loss (Masked Token Loss + Contrastive Loss) over training')
+    plt.grid(True)
+    plt.savefig(os.path.join(img_dir, img_name))
 
 if __name__ == "__main__":
     main()

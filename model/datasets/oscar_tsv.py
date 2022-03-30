@@ -3,7 +3,6 @@ import time
 import json
 import logging
 import random
-import glob
 import base64
 from tqdm import tqdm
 import numpy as np
@@ -13,9 +12,7 @@ from model.utils.tsv_file import TSVFile
 from model.utils.misc import load_from_yaml_file
 
 class OscarTSVDataset(Dataset):
-    def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35,
-                 encoding="utf-8", corpus_lines=None, on_memory=True,
-                 **kwargs):
+    def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35, encoding="utf-8", corpus_lines=None, on_memory=True, **kwargs):
         self.cfg = load_from_yaml_file(yaml_file)
         self.root = os.path.dirname(yaml_file)
         self.vocab = tokenizer.vocab
@@ -148,7 +145,7 @@ class OscarTSVDataset(Dataset):
         imgid2labels = self.imgid2labels[img_id]
         return {"height": imgid2labels["image_h"], "width": imgid2labels["image_w"]}
     
-    def __getitem__(self, item):
+    def __getitem__(self, item): # allows its instances to use the [] (indexer) operators
         cur_id = self.sample_counter
         self.sample_counter += 1
         if not self.on_memory:
@@ -458,12 +455,12 @@ def convert_example_to_features(args, example, max_seq_length, tokenizer, img_fe
 
     # image features
     if args.max_img_seq_length>0:
-        if img_feat_len > args.max_img_seq_length:
+        if img_feat_len > args.max_img_seq_length: # img_feat_len: num_boxes
             input_mask = input_mask + [1] * img_feat_len
         else:
             input_mask = input_mask + [1] * img_feat_len
             pad_img_feat_len = args.max_img_seq_length - img_feat_len
-            input_mask = input_mask + ([0] * pad_img_feat_len)
+            input_mask = input_mask + ([0] * pad_img_feat_len) # input_mask: concate token mask and img mask
     
     lm_label_ids = lm_label_ids + [-1] * args.max_img_seq_length
 

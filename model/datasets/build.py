@@ -92,22 +92,20 @@ def make_data_loader(args, is_distributed=False, arguments=None):
     num_iters = args.max_iters * grad_accumulate_steps
 
     # build dataset
-    datasets = build_dataset(args)
+    datasets = build_dataset(args) # len(datasets) = 1
 
     data_loaders = []
     for i, dataset in enumerate(datasets):
         sampler = make_data_sampler(dataset, shuffle, is_distributed)
 
-        batch_sampler = make_batch_data_sampler(
-           sampler, images_per_gpu, num_iters, start_iter
-        )
+        batch_sampler = make_batch_data_sampler(sampler, images_per_gpu, num_iters, start_iter)
         num_workers = args.num_workers
         data_loader = torch.utils.data.DataLoader(
             dataset,
-            num_workers=num_workers,
-            batch_sampler=batch_sampler,
-            collate_fn=BatchCollator(),
-            pin_memory=True,
+            num_workers=num_workers, # how many subprocesses to use for data loading, how may examples printed
+            batch_sampler=batch_sampler, # returns a batch of indices at a time
+            collate_fn=BatchCollator(), # merges a list of samples to form a mini-batch of Tensor(s)
+            pin_memory=True, # If True, the data loader will copy Tensors into CUDA pinned memory before returning them
         )
         data_loaders.append(data_loader)
     return data_loaders

@@ -7,3 +7,4 @@ test.*
 *.ipynb
 data/
 output/
+__pycache__/
