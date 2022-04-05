@@ -3,12 +3,12 @@ import datetime
 import json
 import logging
 import os
-import random
 import sys
 import time
-import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
 
 sys.path.insert(0, '.')
 
@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--tokenizer_name", default="", type=str, help="Pretrained tokenizer name or path if not the same as model_name")
     parser.add_argument("--cache_dir", default="", type=str, help="Where do you want to store the pre-trained models downloaded from s3")
 
-    parser.add_argument("--max_seq_length", default=35, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
+    parser.add_argument("--max_seq_length", default=25, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
     parser.add_argument("--do_train", action='store_true', help="Whether to run training.")
     parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--max_iters", default=200, type=int, help="Maximal number of training iterations.")
@@ -237,7 +237,6 @@ def main():
 
     def data_process(mini_batch):
         images, targets, qa_inds = mini_batch[0], mini_batch[1], mini_batch[2] # from __getitem__: img feature, img infos, index
-        logger.info('qa_inds: {}'.format(qa_inds))
         targets_transposed = list(zip(*targets))
         input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True)
         input_mask = torch.stack(targets_transposed[1]).to(args.device, non_blocking=True)

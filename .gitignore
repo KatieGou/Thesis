@@ -8,3 +8,5 @@ test.*
 data/
 output/
 __pycache__/
+images/
+relation_output/

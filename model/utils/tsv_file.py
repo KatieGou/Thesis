@@ -60,7 +60,6 @@ class TSVFile(object):
 
     def _ensure_lineidx_loaded(self):
         if self._lineidx is None:
-            logging.info('loading lineidx: {}'.format(self.lineidx))
             with open(self.lineidx, 'r') as fp:
                 self._lineidx = [int(i.strip()) for i in fp.readlines()]
 

@@ -175,7 +175,7 @@ class OscarTSVDataset(Dataset):
             img_feat = torch.cat((img_feat, padding_matrix), 0)
         
         # transform sample to features
-        cur_features=convert_example_to_features(self.args, cur_example, self.seq_len,self.tokenizer, img_feat_len)
+        cur_features=convert_example_to_features(self.args, cur_example, self.seq_len, self.tokenizer, img_feat_len)
 
         return img_feat, (
             torch.tensor(cur_features.input_ids, dtype=torch.long),
