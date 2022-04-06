@@ -37,4 +37,7 @@ make max_seq_length=max_img_seq_len, concatnate img_feature to input_ids
 research question: identify the most performing model (2*2), explore the effect of object tags
 
 baseline training command:
-python baseline.py --model_name_or_path output/checkpoint-0020000 --do_train --do_lower_case 
+python baseline.py --model_name_or_path output/checkpoint-0020000 --do_train --do_lower_case --evaluate_during_training
+
+baseline testing command:
+python baseline.py --do_test --eval_model_dir baseline_output/checkpoint-99-39000 --do_lower_case

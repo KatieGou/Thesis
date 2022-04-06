@@ -4,15 +4,18 @@ import os
 import base64
 import argparse
 import random
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
+import warnings
+warnings.filterwarnings('ignore')
 
 from model.utils.misc import mkdir
 from model.utils.tsv_file import TSVFile
 
-from pytorch_transformers import BertTokenizer, BertConfig
+from pytorch_transformers import BertTokenizer
 
 class RetrievalDataset(Dataset):
     def __init__(self, tokenizer, args, split: str, is_train: bool):
@@ -20,7 +23,7 @@ class RetrievalDataset(Dataset):
         self.data_dir=os.path.join(args.data_dir, split)
         self.img_file=os.path.join(self.data_dir, 'features.tsv')
         self.img_tsv=TSVFile(self.img_file)
-        caption_file=os.path.join(self.data_dir, '{}_captions.tsv'.format(split))
+        caption_file=os.path.join(self.data_dir, '{}_captions.pt'.format(split))
         self.captions=torch.load(caption_file) # {img_id(int): caption(str)}
         self.img_keys=list(self.captions.keys())
 
@@ -50,7 +53,6 @@ class RetrievalDataset(Dataset):
         self.tokenizer=tokenizer
         self.max_seq_len=args.max_seq_length
         self.max_img_seq_len = args.max_img_seq_length
-        assert self.max_seq_len==self.max_img_seq_len, 'max_seq_len and max_img_seq_len must be equal'
         self.args=args
     
     def get_od_labels(self, img_key: int):
@@ -77,7 +79,7 @@ class RetrievalDataset(Dataset):
         seq_padding_len=self.max_seq_len-seq_len
         tokens+=[self.tokenizer.pad_token]*seq_padding_len
         input_ids=self.tokenizer.convert_tokens_to_ids(tokens)
-        input_ids=torch.Tensor(input_ids)
+        input_ids=torch.unsqueeze(torch.Tensor(input_ids), 0)
 
         img_len=img_feat.shape[0]
         if img_len>self.max_img_seq_len:
@@ -87,7 +89,6 @@ class RetrievalDataset(Dataset):
             img_feat=np.concatenate([img_feat, np.zeros((img_padding_len, img_feat.shape[1]), dtype=np.float32)], axis=0)
             img_feat=torch.from_numpy(img_feat)
         
-        assert len(input_ids)==img_feat.shape[1], 'input_ids and img_feat must have the same dim'
         return torch.cat([input_ids, img_feat], dim=0)
     
     def get_image(self, image_id: int):
@@ -123,7 +124,7 @@ class RetrievalDataset(Dataset):
                 od_labels_neg = self.get_od_labels(self.img_keys[img_idx_neg])
                 example_neg=self.tensorize_example(text_a=caption, img_feat=feature_neg, text_b=od_labels_neg)
             
-            example_pair=tuple(list(example)+[1]+list(example_neg)+[0])
+            example_pair=tuple([example]+[1]+[example_neg]+[0])
             return index, example_pair
         else:
             img_key = self.img_keys[index]
@@ -135,7 +136,7 @@ class RetrievalDataset(Dataset):
             random_num=random.random()
             if random_num<0.5: # positive example
                 label=1
-                return index, tuple(list(example) + [label])
+                return index, tuple([example] + [label])
             else:
                 label=0
                 neg_img_indexs = list(range(index)) + list(range(index + 1, len(self.img_keys)))
@@ -143,20 +144,27 @@ class RetrievalDataset(Dataset):
                 if random_num <= 0.75: # negative caption
                     caption_neg = self.captions[self.img_keys[img_idx_neg]]
                     example_neg = self.tensorize_example(text_a=caption_neg, img_feat=feature, text_b=od_labels)
-                    return index, tuple(list(example_neg) + [label])
+                    return index, tuple([example_neg] + [label])
                 else: # negative image
                     feature_neg = self.get_image(self.img_keys[img_idx_neg])
                     od_labels_neg = self.get_od_labels(self.img_keys[img_idx_neg])
                     example_neg = self.tensorize_example(text_a=caption, img_feat=feature_neg, text_b=od_labels_neg)
-                    return index, tuple(list(example_neg) + [label])
+                    return index, tuple([example_neg] + [label])
     
 class Baseline(nn.Module):
     def __init__(self, args):
         super(Baseline, self).__init__()
         self.nn=nn.Sequential(
-            nn.Linear(args.input_size, args.hidden_size),
+            nn.Flatten(),
+            nn.Linear(args.input_size, 2**10),
             nn.LeakyReLU(),
-            nn.Linear(args.hidden_size, args.output_size),
+            nn.Linear(2**10, 2**8),
+            nn.LeakyReLU(),
+            nn.Linear(2**8, 2**6),
+            nn.LeakyReLU(),
+            nn.Linear(2**6, 2**4),
+            nn.LeakyReLU(),
+            nn.Linear(2**4, args.output_size),
         )
 
     def forward(self, x):
@@ -177,20 +185,33 @@ def save_checkpoint(model, tokenizer, args, epoch, global_step):
     tokenizer.save_pretrained(checkpoint_dir)
     logger.info("Saving model checkpoint to %s", checkpoint_dir)
 
-def evaluate(args, model, val_dataloader, length: int):
+def evaluate(args, model, dataloader, length: int):
     model.eval()
     softmax=nn.Softmax(dim=1)
     total_scores=0.0
-    for _, batch in enumerate(val_dataloader):
+    for _, batch in tqdm(dataloader):
         batch=tuple(t.to(args.device) for t in batch)
-        x=torch.cat([batch[0], batch[2]], dim=0)
-        labels=torch.cat([batch[1], batch[3]], dim=0)
+        x=batch[0]
+        labels=batch[1]
         with torch.no_grad():
             outputs=model(x)
             logits=softmax(outputs)
             scores=compute_score_with_logits(logits, labels)
             total_scores+=scores.item()
     return total_scores/length # accuracy
+
+def restore_training_settings(args):
+    assert (not args.do_train) and args.do_test
+    train_args=torch.load(os.path.join(args.eval_model_dir, 'training_args.bin'))
+    override_params=['do_lower_case', 'max_seq_length', 'max_img_seq_length']
+    for param in override_params:
+        if hasattr(train_args, param):
+            train_v=getattr(train_args, param)
+            test_v=getattr(args, param)
+            if train_v!=test_v:
+                logger.warning("Overriding %s: %s -> %s", param, test_v, train_v)
+                setattr(args, param, train_v)
+    return args
 
 def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
@@ -205,7 +226,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
         val_dataloader=DataLoader(val_dataset, sampler=val_sampler, batch_size=args.eval_batch_size, num_workers=args.num_workers)
     
     optimizer=torch.optim.AdamW(params=model.parameters(), lr=args.learning_rate)
-    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda epoch: 1/(1+0.05*epoch))
+    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda epoch: max(1/(1+0.005*epoch), args.min_lr)) # ???
 
     logger.info("***** Running training -- BaseLine *****")
     logger.info("  Num examples = %d", len(train_dataset))
@@ -269,38 +290,36 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
                             json.dump(log_json, f)
     return global_step, global_loss/global_step
 
-def test(args):
-    pass
-
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='data/coco', help='data directory')
     parser.add_argument("--model_name_or_path", default=None, type=str, required=False, help="Path to pre-trained model or model type. required for training.")
     parser.add_argument('--output_dir', type=str, default='baseline_output/', help='output directory')
     parser.add_argument('--max_seq_length', type=int, default=2054, help='max sequence length')
-    parser.add_argument('--max_img_seq_length', type=int, default=50, help='max image sequence length')
-    parser.add_argument('--add_od_labels', type=bool, default=True, help='add object detection labels')
-    parser.add_argument('--do_lower_case', type=bool, action='store_true', help='do lower case')
-    parser.add_argument('--input_size', type=int, default=2054)
-    parser.add_argument('--hidden_size', type=int, default=100)
+    parser.add_argument('--max_img_seq_length', type=int, default=30, help='max image sequence length')
+    parser.add_argument("--img_feature_dim", default=2054, type=int, help="The Image Feature Dimension, features+location.")
+    parser.add_argument('--add_od_labels', default=True, help='add object detection labels')
+    parser.add_argument('--do_lower_case', action='store_true', help='do lower case')
     parser.add_argument('--output_size', type=int, default=2)
     parser.add_argument('--do_train', action='store_true')
     parser.add_argument('--do_test', action='store_true')
-    parser.add_argument('--evaluate_during_training', action='store_true')
-    parser.add_arguemnt('--per_gpu_train_batch_size', type=int, default=8)
-    parser.add_argument('--per_gpu_eval_batch_size', type=int, default=8)
+    parser.add_argument('--evaluate_during_training', action='store_true', help="Run evaluation during training at each save_steps.")
+    parser.add_argument('--per_gpu_train_batch_size', type=int, default=128)
+    parser.add_argument('--per_gpu_eval_batch_size', type=int, default=128)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Number of updates steps to accumulate before performing a backward/update pass.')
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--learning_rate', type=float, default=1e-2)
+    parser.add_argument('--min_lr', type=float, default=0.0001)
     parser.add_argument('--adam_epsilon', type=float, default=1e-8)
     parser.add_argument('--num_workers', type=int, default=6)
-    parser.add_argument('--num_train_epochs', type=int, default=10)
-    parser.add_argument('--logging_steps', type=int, default=20, help="Log every X steps.")
-    parser.add_argument('--save_steps', type=int, default=100, help="Save checkpoint every X steps.")
-    parser.add_argument('--evaluate_during_training', action='store_true', help="Run evaluation during training at each save_steps.")
+    parser.add_argument('--num_train_epochs', type=int, default=100)
+    parser.add_argument('--logging_steps', type=int, default=50, help="Log every X steps.")
+    parser.add_argument('--save_steps', type=int, default=500, help="Save checkpoint every X steps.")
     parser.add_argument('--eval_model_dir', type=str, default='baseline_output/', help="Teting directory containing the saved model.")
     args=parser.parse_args()
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
+
+    args.input_size=args.img_feature_dim*(args.max_img_seq_length+1)
 
     global logger
     logger=logging.getLogger(__name__)
@@ -316,7 +335,7 @@ def main():
     args.n_gpu=torch.cuda.device_count()
     logger.warning('Device: {}, n_gpu: {}'.format(args.device, args.n_gpu))
 
-    config_class, tokenizer_class = BertConfig, BertTokenizer
+    tokenizer_class = BertTokenizer
     if args.do_train:
         tokenizer=tokenizer_class.from_pretrained(args.model_name_or_path, do_lower_case=args.do_lower_case)
         model=Baseline(args).to(args.device)
@@ -327,9 +346,25 @@ def main():
         else:
             val_dataset=None
         loss_fn=nn.CrossEntropyLoss() # perform softmax internally
-        train(args=args, train_dataset=train_dataset, val_dataset=val_dataset, model=model, tokenizer=tokenizer, loss_fn=loss_fn)
+        global_step, avg_loss=train(args=args, train_dataset=train_dataset, val_dataset=val_dataset, model=model, tokenizer=tokenizer, loss_fn=loss_fn)
+        logger.info("Training done: total_step = %s, avg loss = %s", global_step, avg_loss)
     else:
-        test(args)
+        checkpoint=args.eval_model_dir
+        assert os.path.isdir(checkpoint)
+        tokenizer=tokenizer_class.from_pretrained(checkpoint)
+        logger.info('Evaluate the following checkpoint: {}'.format(checkpoint))
+        model=Baseline(args).to(args.device)
+        model.load_state_dict(torch.load(os.path.join(checkpoint, 'pytorch_model.bin')))
+        model.to(args.device)
+        logger.info('Evaluating parameters: {}'.format(args))
+        restore_training_settings(args=args)
+        test_dataset=RetrievalDataset(tokenizer=tokenizer, args=args, split='test', is_train=False)
+        args.test_batch_size=args.per_gpu_eval_batch_size*max(1, args.n_gpu)
+        test_sampler=SequentialSampler(test_dataset)
+        test_dataloader=DataLoader(test_dataset, sampler=test_sampler, batch_size=args.test_batch_size,num_workers=args.num_workers)
+        test_acc=evaluate(args=args, model=model, dataloader=test_dataloader, length=len(test_dataset))
+        logger.info("Test accuracy: %s", test_acc)
+        logger.info('Testing done')
 
 if __name__=='__main__':
     main()
