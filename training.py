@@ -3,17 +3,13 @@ import datetime
 import json
 import logging
 import os
-import sys
 import time
 import torch
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
-sys.path.insert(0, '.')
-
 from pytorch_transformers import AdamW, WarmupLinearSchedule
-# from transformers.modeling_utils import PreTrainedModel as BertImgForPreTraining
 from model.modeling.modeling_bert import BertImgForPreTraining
 from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer # WEIGHTS_NAME: "pytorch_model.bin"
 
@@ -27,28 +23,20 @@ MODEL_CLASSES = {'bert': (BertConfig, BertImgForPreTraining, BertTokenizer),}
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default=None, type=str, required=False, help="The input data dir containing the .yaml files for the task.")
+    parser.add_argument("--data_dir", default=None, type=str, required=True, help="The input data dir containing the .yaml files for the task.")
     parser.add_argument("--dataset_file", default=None, type=str, required=True, help="The training dataset yaml file.")
-    parser.add_argument("--extra_dataset_file", default=None, type=str, required=False, help="The extra training dataset yaml file.")
     parser.add_argument("--bert_model", default=None, type=str, required=True, help="Bert pre-trained model selected in the list: KB/bert-base-swedish-cased, bert-base-multilingual")
     parser.add_argument("--output_dir", default=None, type=str, required=True, help="The output directory where the model checkpoints will be written.")
-
-    parser.add_argument("--chunk_start_id", default=-1, type=int, help="Image Chunk Start ID")
-    parser.add_argument("--chunk_end_id", default=-1, type=int, help="Image Chunk End ID")
 
     parser.add_argument("--max_img_seq_length", default=50, type=int, help="The maximum total input image sequence length.")
     parser.add_argument("--img_feature_dim", default=2054, type=int, help="The Image Feature Dimension.")
     parser.add_argument("--img_feature_type", default='faster_r-cnn', type=str, help="faster_r-cnn or mask_r-cnn")
-    parser.add_argument("--use_layernorm", action='store_true', help="use_layernorm")
 
     parser.add_argument("--drop_out", default=0.1, type=float, help="Drop out for BERT.")
-    parser.add_argument("--use_b", type=int, default=1, help="use_b")
+    parser.add_argument("--use_b", type=int, default=1, help="use text b")
     parser.add_argument("--textb_sample_mode", type=int, default=0, help="0: sample from both texta&textb, 1: sample from textb, 2: sample from QA answers")
-    parser.add_argument("--extra_textb_sample_mode", type=int, default=1)
     parser.add_argument("--texta_false_prob", type=float, default=0.0, help="the probality that we sample wrong texta, should in [0.0, 0.5]")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True, help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
-    parser.add_argument("--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name")
-    parser.add_argument("--tokenizer_name", default="", type=str, help="Pretrained tokenizer name or path if not the same as model_name")
     parser.add_argument("--cache_dir", default="", type=str, help="Where do you want to store the pre-trained models downloaded from s3")
 
     parser.add_argument("--max_seq_length", default=25, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
@@ -58,72 +46,45 @@ def main():
     parser.add_argument("--train_batch_size", default=64, type=int, help="Batch size for training.")
     parser.add_argument("--num_workers", default=6, type=int, help="Number of workers for dataset.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
-    parser.add_argument("--optim", default='adamw', type=str, help="The optimizer used for Bert, [adamw, lamb], default: adamw")
     parser.add_argument("--max_grad_norm", default=-1.0, type=float, help="Max gradient norm.")
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
-    parser.add_argument("--no_cuda", action='store_true', help="Whether not to use CUDA when available")
-    parser.add_argument("--on_memory", action='store_true', help="Whether to load train samples into memory or use disk")
     parser.add_argument("--do_lower_case", action='store_true', help="Whether to lower case the input text. True for uncased models, False for cased models.")
-    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
     parser.add_argument('--seed', type=int, default=42, help="random seed for initialization")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help="Number of updates steps to accumualte before performing a backward/update pass.")
 
-    parser.add_argument("--from_scratch", action='store_true', help="train from scratch")
     parser.add_argument("--use_img_layernorm", type=int, default=0, help="Normalize image features with bertlayernorm")
     parser.add_argument("--img_layer_norm_eps", default=1e-12, type=float, help="The eps in image feature laynorm layer")
 
-    parser.add_argument('--gpu_ids', type=str, default='-1')
     parser.add_argument("--mask_loss_for_unmatched", type=int, default=1, help="masked language model loss for unmatched triplets")
-    parser.add_argument("--extra_loss_weight", type=float, default=0.0, help="the loss weight for the extra train data batch (should be in [0,1])")
     parser.add_argument("--use_gtlabels", type=int, default=1, help="use groundtruth labels for text b or not")
 
-    parser.add_argument('--ckpt_period', type=int, default=10, help="Period for saving checkpoint")
+    parser.add_argument('--ckpt_period', type=int, default=100, help="Period for saving checkpoint")
     parser.add_argument('--log_period', type=int, default=20, help="Period for saving logging info")
+    
     args = parser.parse_args()
 
-    if args.gpu_ids != '-1':
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
-    
-    args.num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
-    args.distributed = args.num_gpus > 1
-
-    if args.gpu_ids != '-1':
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+    assert args.do_train, "Training is currently the only implemented execution option. Please set do_train."
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
         logger.info("Output Directory Exists.")
-    
-    # Setup CUDA, GPU & distributed training
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = torch.cuda.device_count()
-    else: # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend='nccl', init_method="env://")
-        args.n_gpu = 1
-    args.device = device
+
+    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args.n_gpu = torch.cuda.device_count()
 
     # Setup logging
     logging.basicConfig(
         format='%(asctime)s - %(levelname)s - [%(name)s - %(filename)s:%(lineno)d] - %(message)s',
         datefmt='%m/%d/%Y %H:%M:%S',
-        # format='%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
-        # datefmt='%Y-%m-%d:%H:%M:%S',
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN
+        level=logging.INFO
     )
     logger.warning(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
-        args.local_rank, device, args.n_gpu, bool(args.local_rank != -1)
+        "Device: %s, n_gpu: %s, distributed training: %s",
+        args.device, args.n_gpu, bool(args.n_gpu>1)
     )
 
-    if args.gradient_accumulation_steps < 1:
-        raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(args.gradient_accumulation_steps))
+    assert args.gradient_accumulation_steps>=1, "Gradient_accumulation_steps should be >= 1"
     
     # set_seed(seed=args.seed, n_gpu=args.n_gpu)
-    
-    if not args.do_train:
-        raise ValueError("Training is currently the only implemented execution option. Please set `do_train`.")
     
     if not os.path.exists(args.output_dir):
         mkdir(args.output_dir)
@@ -144,16 +105,12 @@ def main():
             arguments["iteration"] = int(folder_name.split('-')[-1])
             assert os.path.isfile(os.path.join(last_checkpoint_dir, WEIGHTS_NAME)), "Last_checkpoint detected, but file not found!"
     
-    # model first
-    if get_rank() != 0:
-        torch.distributed.barrier()
-    
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.bert_model]
     if last_checkpoint_dir is not None:  # recovery
         args.model_name_or_path = last_checkpoint_dir
         logger.info(" -> Recovering model from {}".format(last_checkpoint_dir))
     
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,)
+    config = config_class.from_pretrained(args.model_name_or_path)
     config.img_layer_norm_eps = args.img_layer_norm_eps
     config.use_img_layernorm = args.use_img_layernorm
 
@@ -161,28 +118,14 @@ def main():
     config.img_feature_dim = args.img_feature_dim
     config.img_feature_type = args.img_feature_type
     config.hidden_dropout_prob = args.drop_out
-    if args.texta_false_prob < 0.5 and (args.texta_false_prob > 0 or not args.use_b):
-        args.num_contrast_classes = 3
-    else:
-        args.num_contrast_classes = 2
+    args.num_contrast_classes = 2
     config.num_contrast_classes = args.num_contrast_classes
 
     # Prepare model
     model = BertImgForPreTraining.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
-    
-    # train from scratch
-    if args.from_scratch:
-        if last_checkpoint_dir is None:
-            logger.info("Training from scratch ... ")
-            model.apply(model.init_weights)
-    total_params = sum(p.numel() for p in model.parameters())
-    logger.info('Total Parameters: {}'.format(total_params))
 
     for key, val in vars(config).items():
         setattr(args, key, val)
-    
-    if get_rank() == 0 and args.local_rank != -1:
-        torch.distributed.barrier()
     
     model.to(args.device)
 
@@ -200,30 +143,24 @@ def main():
     ]
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.max_iters)
+    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.max_iters) # linearly increases learning rate from 0 to args.learning_rate over args.warmup_steps, linealy dcreases from args.learning_rate to 0 over args.max_iters-args.warmup_steps
 
-    if arguments['iteration'] > 0 and os.path.isfile(os.path.join(last_checkpoint_dir, 'optimizer.pth')):  # recovery
+    if arguments['iteration'] > 0 and os.path.isfile(os.path.join(last_checkpoint_dir, 'optimizer.pth')): # recovery
         logger.info("Load BERT optimizer from {}".format(last_checkpoint_dir))
         optimizer_to_load = torch.load(os.path.join(last_checkpoint_dir, 'optimizer.pth'), map_location=torch.device("cpu"))
         optimizer.load_state_dict(optimizer_to_load.pop("optimizer"))
         scheduler.load_state_dict(optimizer_to_load.pop("scheduler"))
     
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
-    elif args.n_gpu > 1:
+    if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
     
     # train_examples = None
-    train_dataloaders = make_data_loader(args, is_distributed=args.distributed, arguments=arguments)
+    train_dataloaders = make_data_loader(args, is_distributed=False, arguments=arguments)
 
     if isinstance(train_dataloaders, list):
         train_dataloader = train_dataloaders[0]
     else:
         train_dataloader = train_dataloaders
-    train_dataloader_extra = [None] * len(train_dataloader)
-    if isinstance(train_dataloaders, list) and len(train_dataloaders) > 1:
-        logger.info("Having two train dataloaders!")
-        train_dataloader_extra = train_dataloaders[1]
     tokenizer = train_dataloader.dataset.tokenizer
 
     max_iter = len(train_dataloader) # train_dataloader depends on args.max_iters, so here max_iter=args.max_iters
@@ -236,9 +173,9 @@ def main():
     logger.info("  Total optimization steps = %d", max_iter//args.gradient_accumulation_steps)
 
     def data_process(mini_batch):
-        images, targets, qa_inds = mini_batch[0], mini_batch[1], mini_batch[2] # from __getitem__: img feature, img infos, index
+        images, targets = mini_batch[0], mini_batch[1] # from __getitem__: img feature, img infos, index
         targets_transposed = list(zip(*targets))
-        input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True)
+        input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True) # non_blocking=True: copy asynchronously to args.device, should be used when pin_memory=True
         input_mask = torch.stack(targets_transposed[1]).to(args.device, non_blocking=True)
         segment_ids = torch.stack(targets_transposed[2]).to(args.device, non_blocking=True)
         lm_label_ids = torch.stack(targets_transposed[3]).to(args.device, non_blocking=True)
@@ -269,42 +206,31 @@ def main():
     clock_started = False # Every args.ckpt_period, report train_score and save model
     tr_loss = 0
     nb_tr_examples, nb_tr_steps = 0, 0
-    for step, (batch, batch_extra) in enumerate(zip(train_dataloader, train_dataloader_extra), start_iter):
+    for step, batch in enumerate(train_dataloader, start_iter):
         if not clock_started:
             start_training_time = time.time()
             end = time.time()
             clock_started = True
         
         images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1 = data_process(batch)
-        if batch_extra is not None:
-            images2, input_ids2, input_mask2, segment_ids2, lm_label_ids2, is_next2 = data_process(batch_extra)
         
         data_time = time.time() - end
         
         start1 = time.time()
-        loss1, nb_tr_example1 = forward_backward(images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1, loss_weight=1.0-args.extra_loss_weight)
+        loss1, nb_tr_example1 = forward_backward(images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1, loss_weight=1.0)
         tr_loss += loss1
         nb_tr_examples += nb_tr_example1
         compute_time1 = time.time() - start1
-
-        loss2, nb_tr_example2 = 0.0, 0
-        compute_time2 = 0.0
-        if batch_extra is not None:
-            start2 = time.time()
-            loss2, nb_tr_example2 = forward_backward(images2, input_ids2, input_mask2, segment_ids2, lm_label_ids2, is_next2, loss_weight=args.extra_loss_weight)
-            tr_loss += loss2
-            nb_tr_examples += nb_tr_example2
-            compute_time2 = time.time() - start2
         
         nb_tr_steps += 1
         arguments["iteration"] = step + 1
 
-        if (step + 1) % args.gradient_accumulation_steps == 0: # do gradient clipping
+        if (step + 1) % args.gradient_accumulation_steps == 0: # do gradient update
             if args.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm) # Clips gradient norm of an iterable of parameters
             # do the optimization steps
-            optimizer.step()
-            scheduler.step()  # Update learning rate schedule
+            optimizer.step() # apply grad of parameters
+            scheduler.step() # Update learning rate schedule
             optimizer.zero_grad()
             
             # measure elapsed time
@@ -315,9 +241,8 @@ def main():
                     'compute': batch_time, 
                     'data': data_time,
                     'compute1': compute_time1,
-                    'compute2': compute_time2
                 },
-                'batch_metrics': {'loss': loss1+loss2}
+                'batch_metrics': {'loss': loss1}
             }
             params_to_log = {'params': {'bert_lr': optimizer.param_groups[0]["lr"]}}
             meters.update_metrics(metrics_to_log)
@@ -336,7 +261,6 @@ def main():
         if (step + 1) == max_iter or (step + 1) % args.ckpt_period == 0:  # Save a trained model
             log_json[step+1] = tr_loss
             train_metrics_total = torch.Tensor([tr_loss, nb_tr_examples, nb_tr_steps]).to(args.device)
-            torch.distributed.all_reduce(train_metrics_total)
             # reset metrics
             tr_loss = 0
             nb_tr_examples, nb_tr_steps = 0, 0

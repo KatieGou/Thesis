@@ -1,25 +1,21 @@
 import logging
-import sys
 import math
 import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss, MSELoss
 from transformers import BertModel
-from pytorch_transformers.modeling_bert import BertEmbeddings,BertSelfAttention, BertAttention, BertEncoder, BertLayer, BertSelfOutput, BertIntermediate, BertOutput,BertPooler, BertLayerNorm, BertPreTrainedModel, BertLMPredictionHead, BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP, load_tf_weights_in_bert
-# BERT_PRETRAINED_MODEL_ARCHIVE_MAP: need to add Swedish BERT
+from pytorch_transformers.modeling_bert import BertEmbeddings, BertSelfAttention, BertAttention, BertEncoder, BertLayer, BertSelfOutput, BertIntermediate, BertOutput,BertPooler, BertLayerNorm, BertPreTrainedModel, BertLMPredictionHead, BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP, load_tf_weights_in_bert
 from .modeling_utils import ImgPreTrainedModel
 
 logger=logging.getLogger(__name__)
-
-# need: BertImgForPreTraining, BertImgModel, BertPreTrainingHeads, CaptionBertEncoder, BertPooler, CaptionBertAttention, CaptionBertSelfAttention
 
 class CaptionBertSelfAttention(BertSelfAttention):
     """
     Modified from BertSelfAttention to add support for history_state.
     """
     def __init__(self, config) -> None:
-        super().__init__(config)
+        super().__init__(config) # initialized self.query, self.key and self.value
     
     def forward(self, hidden_states, attention_mask, head_mask=None, history_state=None):
         if history_state is not None:
@@ -64,9 +60,9 @@ class CaptionBertAttention(BertAttention):
     Modified from BertAttention to add support for history_state.
     """
     def __init__(self, config) -> None:
-        super().__init__(config)
+        super().__init__(config) # initialized self.self, self.output
         self.self=CaptionBertSelfAttention(config)
-        self.output=BertSelfOutput(config)
+        self.output=BertSelfOutput(config) # dense+dropout+layer_norm
     
     def forward(self, input_tensor, attention_mask, head_mask=None, history_state=None):
         self_outputs=self.self(input_tensor, attention_mask, head_mask, history_state)
@@ -80,9 +76,9 @@ class CaptionBertLayer(BertLayer):
     """
     def __init__(self, config) -> None:
         super().__init__(config)
-        self.attention=CaptionBertAttention(config)
-        self.intermediate=BertIntermediate(config)
-        self.output=BertOutput(config)
+        self.attention=CaptionBertAttention(config) # attention output
+        self.intermediate=BertIntermediate(config) # dense+glue activation
+        self.output=BertOutput(config) # dense+dropout+layer_norm
     
     def forward(self, hidden_states, attention_mask, head_mask=None, history_state=None):
         attention_outputs = self.attention(hidden_states, attention_mask, head_mask, history_state)
@@ -94,6 +90,7 @@ class CaptionBertLayer(BertLayer):
 
 class CaptionBertEncoder(BertEncoder):
     """
+    Compute the hidden state from bert layers and become encoder.
     Modified from BertEncoder to add support for encoder_history_states.
     """
     def __init__(self, config) -> None:
@@ -124,14 +121,15 @@ class CaptionBertEncoder(BertEncoder):
             outputs = outputs + (all_attentions,)
         return outputs # (hidden_states, all_hidden_states(optional), all_attentions(optional))
 
+# maybe can remove all history_states
 class BertImgModel(BertPreTrainedModel):
     """Expand from BertModel to handle image region features as input
     """
     def __init__(self, config):
         super().__init__(config)
-        self.embeddings = BertEmbeddings(config)
-        self.encoder=CaptionBertEncoder(config)
-        self.pooler=BertPooler(config)
+        self.embeddings = BertEmbeddings(config) # words_embeddings + position_embeddings + token_type_embeddings
+        self.encoder=CaptionBertEncoder(config) # output from the encoder
+        self.pooler=BertPooler(config) #taking the hidden state corresponding to the first token.
 
         self.img_dim=config.img_feature_dim
         logger.info('BertImgModel Image Dimension: {}'.format(self.img_dim))
@@ -327,9 +325,9 @@ class BertPreTrainingHeads(nn.Module):
         return prediction_scores, seq_relationship_score
 
 class BertImgForPreTraining(ImgPreTrainedModel):
-    config_class = BertConfig
-    pretrained_model_archive_map = BERT_PRETRAINED_MODEL_ARCHIVE_MAP
-    load_tf_weights = load_tf_weights_in_bert
+    config_class = BertConfig # basic config for bert: vocab size, hidden size, etc.
+    pretrained_model_archive_map = BERT_PRETRAINED_MODEL_ARCHIVE_MAP # {model: url}
+    load_tf_weights = load_tf_weights_in_bert # Load tf checkpoints in a pytorch model.
     base_model_prefix = "bert"
 
     def __init__(self, config):

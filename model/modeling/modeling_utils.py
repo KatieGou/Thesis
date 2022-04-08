@@ -1,9 +1,7 @@
 import os
 import logging
 import torch
-import torch.nn.functional as F
 
-from pytorch_transformers.modeling_bert import BertConfig, load_tf_weights_in_bert, BERT_PRETRAINED_MODEL_ARCHIVE_MAP, BertPreTrainedModel
 from pytorch_transformers.modeling_utils import PreTrainedModel, WEIGHTS_NAME, TF_WEIGHTS_NAME
 from pytorch_transformers.file_utils import cached_path
 
@@ -41,9 +39,9 @@ class ImgPreTrainedModel(PreTrainedModel):
         elif os.path.isdir(pretrained_model_name_or_path):
             if from_tf:
                 # Directly load from a TensorFlow checkpoint
-                archive_file = os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index")
+                archive_file = os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index") # TF_WEIGHTS_NAME: 'model.ckpt'
             else:
-                archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)
+                archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME) # WEIGHTS_NAME: 'pytorch_model.bin'
         else:
             if from_tf:
                 # Directly load from a TensorFlow checkpoint
@@ -52,7 +50,7 @@ class ImgPreTrainedModel(PreTrainedModel):
                 archive_file = pretrained_model_name_or_path
         # redirect to the cache, if necessary
         try:
-            resolved_archive_file = cached_path(archive_file, cache_dir=cache_dir)
+            resolved_archive_file = cached_path(archive_file, cache_dir=cache_dir) # get from cache, url or local path
         except EnvironmentError:
             if pretrained_model_name_or_path in cls.pretrained_model_archive_map:
                 logger.error(
@@ -110,8 +108,7 @@ class ImgPreTrainedModel(PreTrainedModel):
 
         def load(module, prefix=''):
             local_metadata = {} if metadata is None else metadata.get(prefix[:-1], {})
-            module._load_from_state_dict(
-                state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
+            module._load_from_state_dict(state_dict, prefix, local_metadata, True, missing_keys, unexpected_keys, error_msgs)
             for name, child in module._modules.items():
                 if child is not None:
                     load(child, prefix + name + '.')
@@ -126,17 +123,13 @@ class ImgPreTrainedModel(PreTrainedModel):
 
         load(model_to_load, prefix=start_prefix)
         if len(missing_keys) > 0:
-            logger.info("Weights of {} not initialized from pretrained model: {}".format(
-                model.__class__.__name__, missing_keys))
+            logger.info("Weights of {} not initialized from pretrained model: {}".format(model.__class__.__name__, missing_keys))
         if len(unexpected_keys) > 0:
-            logger.info("Weights from pretrained model not used in {}: {}".format(
-                model.__class__.__name__, unexpected_keys))
+            logger.info("Weights from pretrained model not used in {}: {}".format(model.__class__.__name__, unexpected_keys))
         if len(error_msgs) == 2 and "size mismatch for cls.seq_relationship.weight" in error_msgs[0]:
-            logger.info('Error(s) in loading state_dict for {}:\n\t{}'.format(
-                model.__class__.__name__, "\n\t".join(error_msgs)))
+            logger.info('Error(s) in loading state_dict for {}:\n\t{}'.format(model.__class__.__name__, "\n\t".join(error_msgs)))
         elif len(error_msgs) > 0:
-            raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(
-                               model.__class__.__name__, "\n\t".join(error_msgs)))
+            raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(model.__class__.__name__, "\n\t".join(error_msgs)))
 
         if hasattr(model, 'tie_weights'):
             model.tie_weights()  # make sure word embedding weights are still tied

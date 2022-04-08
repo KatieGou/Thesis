@@ -226,7 +226,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
         val_dataloader=DataLoader(val_dataset, sampler=val_sampler, batch_size=args.eval_batch_size, num_workers=args.num_workers)
     
     optimizer=torch.optim.AdamW(params=model.parameters(), lr=args.learning_rate)
-    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda epoch: max(1/(1+0.005*epoch), args.min_lr)) # ???
+    scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda epoch: max(1/(1+0.005*epoch), args.min_factor))
 
     logger.info("***** Running training -- BaseLine *****")
     logger.info("  Num examples = %d", len(train_dataset))
@@ -258,8 +258,8 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
             global_acc+=batch_acc
             if (step+1)%args.gradient_accumulation_steps==0:
                 global_step+=1
-                scheduler.step() # update learning rate
                 optimizer.step() # apply grad of parameters
+                scheduler.step() # update learning rate
                 model.zero_grad()
                 if global_step%args.logging_steps==0:
                     logger.info(
@@ -288,6 +288,14 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
                         log_json.append(epoch_log)
                         with open(os.path.join(args.output_dir, 'eval_logs.json'), 'w') as f:
                             json.dump(log_json, f)
+                        
+                        if len(log_json)>=2:
+                            is_imporved=log_json[-1]['validation acuracy']>=log_json[-2]['validation acuracy']
+                            if not is_imporved:
+                                args.patience-=1
+                            if args.patience<=0:
+                                logger.info('Early Stopping due to no improvement in validation accuracy')
+                                return global_step, global_loss/global_step
     return global_step, global_loss/global_step
 
 def main():
@@ -308,8 +316,8 @@ def main():
     parser.add_argument('--per_gpu_eval_batch_size', type=int, default=128)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Number of updates steps to accumulate before performing a backward/update pass.')
     parser.add_argument('--learning_rate', type=float, default=1e-2)
-    parser.add_argument('--min_lr', type=float, default=0.0001)
-    parser.add_argument('--adam_epsilon', type=float, default=1e-8)
+    parser.add_argument('--min_factor', type=float, default=0.05, help='minimum factor to be multiplied by learning rate')
+    parser.add_argument('--patience', type=int, default=10, help='patience for early stopping')
     parser.add_argument('--num_workers', type=int, default=6)
     parser.add_argument('--num_train_epochs', type=int, default=100)
     parser.add_argument('--logging_steps', type=int, default=50, help="Log every X steps.")

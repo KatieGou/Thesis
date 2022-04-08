@@ -98,9 +98,7 @@ class MetricLogger(object):
 
 
 class TensorboardLogger(MetricLogger):
-    def __init__(self,
-                 log_dir,
-                 delimiter='\t'):
+    def __init__(self, log_dir, delimiter='\t'):
         super(TensorboardLogger, self).__init__(delimiter)
         try:
             from tensorboardX import SummaryWriter

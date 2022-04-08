@@ -12,13 +12,12 @@ from model.utils.tsv_file import TSVFile
 from model.utils.misc import load_from_yaml_file
 
 class OscarTSVDataset(Dataset):
-    def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35, encoding="utf-8", corpus_lines=None, on_memory=True, **kwargs):
+    def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35, encoding="utf-8", corpus_lines=None, **kwargs):
         self.cfg = load_from_yaml_file(yaml_file)
         self.root = os.path.dirname(yaml_file)
         self.vocab = tokenizer.vocab
         self.tokenizer = tokenizer
         self.seq_len = seq_len
-        self.on_memory = on_memory
         self.corpus_lines = corpus_lines  # number of non-empty lines in input corpus
         self.corpus_tsvfile = TSVFile(os.path.join(self.root, self.cfg['corpus_file'])) # my_coco.tsv: [img_id, caption]
         if 'textb_sample_mode' in kwargs:
@@ -50,11 +49,6 @@ class OscarTSVDataset(Dataset):
         self.current_random_doc = 0
         self.num_docs = 0
         self.sample_to_doc = []  # map sample index to doc and line, [{doc_id: , line: }, ...]
-
-        self.chunk_list = None
-        if 0 <= args.chunk_start_id <= args.chunk_end_id and args.chunk_end_id >= 0:
-            self.chunk_list = [str(c_i) for c_i in range(args.chunk_start_id, args.chunk_end_id)]
-            logging.info('Chunk list: {}'.format(','.join(self.chunk_list)))
         
         # load image tags and features
         t_start = time.time()
@@ -68,66 +62,63 @@ class OscarTSVDataset(Dataset):
         t_end = time.time()
         logging.info('Info: loading img features using {} secs'.format(t_end - t_start))
 
-        if on_memory:
-            self.all_docs = list() # [[img_id, texta, textb], ...]
-            self.imgid2labels = dict()
-            self.corpus_lines = 0
-            max_tokens = 0
-            for line_no in tqdm(range(len(self.corpus_tsvfile))):
-                doc=list() # img_id, caption, detected classes
-                row = self.corpus_tsvfile.seek(line_no)
-                img_id=row[0] # should be str
-                dataset_name='coco'
-                img_feat_offset_map = self.img_feat_offset_map[dataset_name]
-                assert img_id in img_feat_offset_map, 'Image id {} cannot be found in image feature imageid_to_index file!'.format(img_id)
+        self.all_docs = list() # [[img_id, texta, textb], ...]
+        self.imgid2labels = dict()
+        self.corpus_lines = 0
+        max_tokens = 0
+        for line_no in tqdm(range(len(self.corpus_tsvfile))):
+            doc=list() # img_id, caption, detected classes
+            row = self.corpus_tsvfile.seek(line_no)
+            img_id=row[0] # should be str
+            dataset_name='coco'
+            img_feat_offset_map = self.img_feat_offset_map[dataset_name]
+            assert img_id in img_feat_offset_map, 'Image id {} cannot be found in image feature imageid_to_index file!'.format(img_id)
 
-                # append id info
-                doc.append(img_id)
-                # append text_a info, caption
-                self.corpus_lines+=1
-                sample = {"doc_id": len(self.all_docs), "line": len(doc)}
-                self.sample_to_doc.append(sample)
-                assert len(row[1]) != 0, "Text_a is empty!"
-                doc.append(row[1])
-                # append text_b info, labels
-                self.corpus_lines+=1
-                label_id=img_id
-                label_line_no = self.img_label_offset_map[dataset_name][label_id]
-                rowb = self.img_label_file[dataset_name].seek(label_line_no) # should be [img_id, labels (pred_class, bbox, conf)]
-                assert label_id == rowb[0]
-                results = json.loads(rowb[1]) # dict, {image_h: , image_w: , num_boxes: , objects: [{class: , conf: , rect: , }, ...]}
-                objects = results['objects']
-                if row[0] not in self.imgid2labels:
-                    self.imgid2labels[row[0]]={
-                        "image_h": results["image_h"],
-                        "image_w": results["image_w"],
-                        "boxes": None
-                    }
-                else:
-                    assert results["image_h"] == self.imgid2labels[row[0]]["image_h"], "Image_h does not match in image {}!".format(row[0])
-                    assert results["image_w"] == self.imgid2labels[row[0]]["image_w"], "Image_w does not match in image {}!".format(row[0])
-                if args.use_gtlabels and 'gt_objects' in results:
-                    # use ground-truth tags for text_b
-                    textb = ' '.join([cur_d['class'] for cur_d in results["gt_objects"]])
-                else:
-                    textb = ' '.join([cur_d['class'] for cur_d in objects])
-                # assert len(textb) != 0, "Text_b is empty in {} : {}".format(dataset_name, row[1])
-                if len(textb)==0:
-                    textb='ingenting'
-                doc.append(textb)
+            # append id info
+            doc.append(img_id)
+            # append text_a info, caption
+            self.corpus_lines+=1
+            sample = {"doc_id": len(self.all_docs), "line": len(doc)}
+            self.sample_to_doc.append(sample)
+            assert len(row[1]) != 0, "Text_a is empty!"
+            doc.append(row[1])
+            # append text_b info, labels
+            self.corpus_lines+=1
+            label_id=img_id
+            label_line_no = self.img_label_offset_map[dataset_name][label_id]
+            rowb = self.img_label_file[dataset_name].seek(label_line_no) # should be [img_id, labels (pred_class, bbox, conf)]
+            assert label_id == rowb[0]
+            results = json.loads(rowb[1]) # dict, {image_h: , image_w: , num_boxes: , objects: [{class: , conf: , rect: , }, ...]}
+            objects = results['objects']
+            if row[0] not in self.imgid2labels:
+                self.imgid2labels[row[0]]={
+                    "image_h": results["image_h"],
+                    "image_w": results["image_w"],
+                    "boxes": None
+                }
+            else:
+                assert results["image_h"] == self.imgid2labels[row[0]]["image_h"], "Image_h does not match in image {}!".format(row[0])
+                assert results["image_w"] == self.imgid2labels[row[0]]["image_w"], "Image_w does not match in image {}!".format(row[0])
+            if args.use_gtlabels and 'gt_objects' in results:
+                # use ground-truth tags for text_b
+                textb = ' '.join([cur_d['class'] for cur_d in results["gt_objects"]])
+            else:
+                textb = ' '.join([cur_d['class'] for cur_d in objects])
+            # assert len(textb) != 0, "Text_b is empty in {} : {}".format(dataset_name, row[1])
+            if len(textb)==0:
+                textb='ingenting'
+            doc.append(textb)
 
-                # add to all_docs
-                max_tokens = max(max_tokens, len(doc[1].split(' ')) + len(doc[2].split(' ')))
-                self.all_docs.append(doc)
-            
-            self.num_docs = len(self.all_docs)
-            logging.info("Max_tokens: {}".format(max_tokens))
-        else:
-            raise ValueError("on_memory = False Not supported yet!")
+            # add to all_docs
+            max_tokens = max(max_tokens, len(doc[1].split(' ')) + len(doc[2].split(' ')))
+            self.all_docs.append(doc)
+        
+        self.num_docs = len(self.all_docs)
+        logging.info("Max_tokens: {}".format(max_tokens))
         
         logging.info("Total docs - Corpus_lines: {}-{}".format(self.num_docs, self.corpus_lines))
     
-    def __len__(self): # ???
+    def __len__(self):
         # last line of doc won't be used, because there's no "nextSentence".
         return self.corpus_lines - self.num_docs
     
@@ -147,11 +138,7 @@ class OscarTSVDataset(Dataset):
     
     def __getitem__(self, item): # allows its instances to use the [] (indexer) operators
         cur_id = self.sample_counter
-        self.sample_counter += 1
-        if not self.on_memory:
-            if cur_id != 0 and (cur_id % len(self) == 0):
-                raise ValueError("on_memory = False Not supported yet!")
-        
+        self.sample_counter += 1        
         img_id, t1, t2, is_next_label, is_img_match = self.random_sent(item)
 
         # tokenize
@@ -225,22 +212,19 @@ class OscarTSVDataset(Dataset):
             tuple: img_id, sentence1, sentence2
         """        
         assert item < self.corpus_lines
-        if self.on_memory:
-            sample = self.sample_to_doc[item]
-            img_id = self.all_docs[sample["doc_id"]][0].strip()
-            t1=self.all_docs[sample["doc_id"]][sample["line"]] # texta
-            t2 = self.all_docs[sample["doc_id"]][sample["line"] + 1] # textb
-            self.current_doc = sample["doc_id"]
-            self.current_img = img_id
+        sample = self.sample_to_doc[item]
+        img_id = self.all_docs[sample["doc_id"]][0].strip()
+        t1=self.all_docs[sample["doc_id"]][sample["line"]] # texta
+        t2 = self.all_docs[sample["doc_id"]][sample["line"] + 1] # textb
+        self.current_doc = sample["doc_id"]
+        self.current_img = img_id
 
-            assert t1 != ""
-            if self.args.use_b:
-                assert t2 != ""
-            else:
-                t2=""
-            return img_id, t1, t2
+        assert t1 != ""
+        if self.args.use_b:
+            assert t2 != ""
         else:
-            raise ValueError("on_memory = False Not supported yet!")
+            t2=""
+        return img_id, t1, t2
     
     def get_random_line(self):
         """Get random line from another document for nextSentence task.
@@ -251,22 +235,19 @@ class OscarTSVDataset(Dataset):
         Returns:
             tuple: img_id, random sampled text
         """        
-        if self.on_memory:
-            if self.textb_sample_mode in [0, 1]: # sample from all docs
-                for _ in range(10):
-                    rand_doc_idx = random.randrange(0, len(self.all_docs))
-                    img_id = self.all_docs[rand_doc_idx][0]
-                    if img_id != self.current_img:
-                        break
-                rand_doc=self.all_docs[rand_doc_idx]
-            img_id = rand_doc[0]
-            if self.textb_sample_mode == 0: # default sample mode
-                line = rand_doc[random.randrange(1, len(rand_doc))] # texta or textb
-            else: # only sample text_b
-                line = rand_doc[2]
-            return img_id, line
-        else:
-            raise ValueError("on_memory = False Not supported yet!")
+        if self.textb_sample_mode in [0, 1]: # sample from all docs
+            for _ in range(10):
+                rand_doc_idx = random.randrange(0, len(self.all_docs))
+                img_id = self.all_docs[rand_doc_idx][0]
+                if img_id != self.current_img:
+                    break
+            rand_doc=self.all_docs[rand_doc_idx]
+        img_id = rand_doc[0]
+        if self.textb_sample_mode == 0: # default sample mode
+            line = rand_doc[random.randrange(1, len(rand_doc))] # texta or textb
+        else: # only sample text_b
+            line = rand_doc[2]
+        return img_id, line
     
     def get_random_texta(self):
         """Get random text_a from another document for nextSentence task.
@@ -277,18 +258,15 @@ class OscarTSVDataset(Dataset):
         Returns:
             tuple: img_id, random sampled texta
         """        
-        if self.on_memory:
-            for _ in range(10):
-                rand_doc_idx = random.randrange(0, len(self.all_docs))
-                img_id = self.all_docs[rand_doc_idx][0]
-                if img_id != self.current_img:
-                    break
-            rand_doc = self.all_docs[rand_doc_idx]
-            img_id = rand_doc[0]
-            line = rand_doc[1] # texta
-            return img_id, line
-        else:
-            raise ValueError("on_memory = False Not supported yet!")
+        for _ in range(10):
+            rand_doc_idx = random.randrange(0, len(self.all_docs))
+            img_id = self.all_docs[rand_doc_idx][0]
+            if img_id != self.current_img:
+                break
+        rand_doc = self.all_docs[rand_doc_idx]
+        img_id = rand_doc[0]
+        line = rand_doc[1] # texta
+        return img_id, line
 
     def load_img_labels(self):
         self.check_img_label_file()

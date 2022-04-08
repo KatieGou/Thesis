@@ -239,7 +239,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
     if args.scheduler == "constant":
         scheduler = WarmupConstantSchedule(optimizer, warmup_steps=args.warmup_steps) # Linearly increases lr from 0 to 1 over 'warmup_steps' training steps. Keep lr schedule equal to 1 after warmup_steps
     elif args.scheduler == "linear":
-        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total) # Linearly increases lr from 0 to 1 over 'warmup_steps' training steps. Linearly decreases lr from 1 to 0 over remaining 't_total-warmup_steps steps
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total) # Linearly increases lr from 0 to 1 over 'warmup_steps' training steps. Linearly decreases lr from 1 to 0 over remaining t_total-warmup_steps steps
     else:
         raise ValueError("Unknown scheduler type: {}".format(args.scheduler))
     
@@ -282,8 +282,8 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
             global_acc += batch_acc
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 global_step += 1
-                scheduler.step() # update lr
                 optimizer.step() # apply grad of parameters
+                scheduler.step() # update lr
                 model.zero_grad() # clears grad for every parameter
                 if global_step % args.logging_steps == 0:
                     logger.info(

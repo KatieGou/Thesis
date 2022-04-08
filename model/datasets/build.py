@@ -17,25 +17,17 @@ def build_dataset(args):
     full_yaml_file = os.path.join(args.data_dir, args.dataset_file)
     assert os.path.isfile(full_yaml_file)
 
-    tokenizer=BertTokenizer.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
+    tokenizer=BertTokenizer.from_pretrained(args.model_name_or_path, do_lower_case=args.do_lower_case)
 
     cfg=dict(
         yaml_file=full_yaml_file,
         args=args,
         seq_len=args.max_seq_length,
-        on_memory=args.on_memory,
         tokenizer=tokenizer,
     )
 
     # make dataset from factory
     datasets = [OscarTSVDataset(**cfg)]
-    if args.extra_dataset_file:
-        full_yaml_file = os.path.join(args.data_dir, args.extra_dataset_file)
-        assert os.path.isfile(full_yaml_file)
-        cfg['yaml_file'] = full_yaml_file
-        cfg['textb_sample_mode'] = args.extra_textb_sample_mode
-        datasets.append(OscarTSVDataset(**cfg))
-    
     return datasets
 
 def make_data_sampler(dataset, shuffle, distributed):

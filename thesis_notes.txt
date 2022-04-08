@@ -1,5 +1,11 @@
 training command:
-python -m torch.distributed.launch --nproc_per_node=1 training.py --use_b 1 --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --learning_rate 5e-05  --warmup_steps 0 --do_train --on_memory --train_batch_size 16 --ckpt_period 200 --max_iters 20000 --log_period 50 --data_dir data --dataset_file settings.yaml
+python -m torch.distributed.launch --nproc_per_node=1 training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 16 --ckpt_period 100 --max_iters 200 --log_period 20 --data_dir data --dataset_file settings.yaml
+python training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 16 --ckpt_period 100 --max_iters 200 --log_period 20 --data_dir data --dataset_file settings.yaml
+
+nproc_per_node: num of gpus you have
+cancel: no_cuda, local_rank, gpu_ids in training.py
+modify: make_data_loader
+study: non_blocking, meters
 
 modification of packages: 
 1. modeling_bert.py: added model and config
@@ -9,24 +15,19 @@ BERT_PRETRAINED_MODEL_ARCHIVE_MAP={
 BERT_PRETRAINED_CONFIG_ARCHIVE_MAP={
     'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/config.json"
 }
-2. modeling_utils.py: print json objects
-# 3. modeling_utils.py: print model load
-4. modeling_utils.py: print init
 
 relation.py:
 train_captions.pt: {img_id: caption}
 
 relation training command:
-python relation.py --model_name_or_path output/checkpoint-0020000 --do_train --num_train_epochs 5 --max_seq_length 50 --do_lower_case --save_steps 200 --evaluate_during_training
+python relation.py --model_name_or_path output/checkpoint-0000200 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
 
 relation testing command:
-python relation.py --do_test --eval_model_dir relation_output/checkpoint-0-400 --do_lower_case
-
-training and relation at the same time
+python relation.py --do_test --eval_model_dir relation_output/checkpoint-0-100 --do_lower_case
 
 modify:
 early stopping
-inference
+estimate time
 
 need to cancel: args.num_labels, 
 need to study: img_layer_norm_eps, use_img_layernorm, gradient_accumulation_steps, scheduler, adam, max_grad_norm, warmup_steps
@@ -40,4 +41,4 @@ baseline training command:
 python baseline.py --model_name_or_path output/checkpoint-0020000 --do_train --do_lower_case --evaluate_during_training
 
 baseline testing command:
-python baseline.py --do_test --eval_model_dir baseline_output/checkpoint-99-39000 --do_lower_case
+python baseline.py --do_test --eval_model_dir baseline_output/checkpoint-39-15500 --do_lower_case
