@@ -149,13 +149,13 @@ class BertImgModel(BertPreTrainedModel):
             self.input_embeddings = nn.Linear(config.code_dim, config.code_size, bias=True)
             self.code_embeddings = nn.Embedding(config.code_voc, config.code_dim, padding_idx=0)
             self.img_embedding = nn.Linear(config.code_dim, self.config.hidden_size, bias=True)
-        else:
+        else: # faster_rcnn or mask_rcnn
             self.img_embedding = nn.Linear(self.img_dim, self.config.hidden_size, bias=True)
             self.dropout = nn.Dropout(config.hidden_dropout_prob)
             if self.use_img_layernorm:
                 self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.img_layer_norm_eps)
         
-        self.apply(self.init_weights)
+        self.apply(self.init_weights) # apply(fn): Applies fn recursively to every submodule (including children and itself)
 
     def _resize_token_embeddings(self, new_num_tokens):
         old_embeddings = self.embeddings.word_embeddings
@@ -226,7 +226,7 @@ class BertImgModel(BertPreTrainedModel):
             elif self.img_feature_type == 'dis_code_scale': # left scaled
                 code_emb = self.code_embeddings(img_feats)
                 img_embedding_output = self.img_embedding(code_emb)
-            else:
+            else: # faster_rcnn or mask_rcnn
                 img_embedding_output = self.img_embedding(img_feats)
                 if self.use_img_layernorm:
                     img_embedding_output = self.LayerNorm(img_embedding_output)
@@ -320,8 +320,8 @@ class BertPreTrainingHeads(nn.Module):
         self.seq_relationship = nn.Linear(config.hidden_size, num_seq_relations)
 
     def forward(self, sequence_output, pooled_output):
-        prediction_scores = self.predictions(sequence_output) # prediction_scores: gelu transform+layernorm
-        seq_relationship_score = self.seq_relationship(pooled_output) # applies a linear transformation to the incoming data
+        prediction_scores = self.predictions(sequence_output) # prediction_scores: (sequence_output.shape[0], vocab_size), Masked Token Loss, prob of words at masked position
+        seq_relationship_score = self.seq_relationship(pooled_output) # 0 or 1, whether the image corresponds to the caption, Contrastive Loss.
         return prediction_scores, seq_relationship_score
 
 class BertImgForPreTraining(ImgPreTrainedModel):
@@ -336,7 +336,7 @@ class BertImgForPreTraining(ImgPreTrainedModel):
         self.cls = BertPreTrainingHeads(config)
         self.num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
 
-        self.apply(self.init_weights)
+        self.apply(self.init_weights) # initialize weights
         self.tie_weights()
 
     def init_weights(self, module):
@@ -357,10 +357,10 @@ class BertImgForPreTraining(ImgPreTrainedModel):
         self._tie_or_clone_weights(self.cls.predictions.decoder, self.bert.embeddings.word_embeddings)
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None, next_sentence_label=None, position_ids=None, head_mask=None, img_feats=None):
-        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats)
+        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats) # seqence_output from encoder, pooled sequence_output
 
         sequence_output, pooled_output = outputs[:2]
-        prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
+        prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output) # (batch_size, vocab_size), (batch_size, num_seq_relations)
 
         outputs = (prediction_scores, seq_relationship_score,) + outputs[2:]  # add hidden states and attention if they are here
 
@@ -371,4 +371,4 @@ class BertImgForPreTraining(ImgPreTrainedModel):
             total_loss = masked_lm_loss + next_sentence_loss
             outputs = (total_loss,) + outputs + (masked_lm_loss,)
 
-        return outputs  # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
+        return outputs  # (loss), prediction_scores, seq_relationship_score, (hidden_states (opt)), (attentions (opt)), masked_lm_loss

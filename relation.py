@@ -329,7 +329,7 @@ def restore_training_settings(args):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--data_dir", default='data/coco', type=str, required=False, help="The input training data dir with all required files.")
+    parser.add_argument("--img_feature_type", default='faster_rcnn', type=str, help="faster_rcnn or mask_rcnn")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=False, help="Path to pre-trained model or model type. required for training.")
     parser.add_argument("--output_dir", default='relation_output/', type=str, required=False, help="The output directory to save checkpoint and test results.")
     parser.add_argument("--loss_type", default='sfmx', type=str, help="Loss function types: support kl, sfmx")
@@ -341,9 +341,8 @@ def main():
     parser.add_argument("--add_od_labels", default=True, action='store_true', help="Whether to add object detection labels or not.")
     parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
     parser.add_argument("--drop_out", default=0.1, type=float, help="Drop out in BERT.")
-    parser.add_argument("--max_img_seq_length", default=50, type=int, help="The maximum total input image sequence length.")
+    parser.add_argument("--max_img_seq_length", default=36, type=int, help="The maximum total input image sequence length.")
     parser.add_argument("--img_feature_dim", default=2054, type=int, help="The Image Feature Dimension, features+location.")
-    parser.add_argument("--img_feature_type", default='frcnn', type=str, help="Image feature type in [frcnn, maskrcnn].")
     parser.add_argument("--use_img_layernorm", type=int, default=1, help="Normalize image features with bertlayernorm")
     parser.add_argument("--img_layer_norm_eps", default=1e-12, type=float, help="The epsilon in image feature layer normalization")
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.")
@@ -366,8 +365,9 @@ def main():
     parser.add_argument("--evaluate_during_training", action='store_true', help="Run evaluation during training at each save_steps.")
     parser.add_argument("--eval_model_dir", type=str, default='', help="Model directory for evaluation.")
     parser.add_argument('--seed', type=int, default=42, help="random seed for initialization.")
-
     args=parser.parse_args()
+
+    args.data_dir=os.path.join(*['data', args.img_feature_type, 'coco'])
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
 

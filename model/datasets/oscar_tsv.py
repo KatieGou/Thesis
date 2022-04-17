@@ -19,7 +19,7 @@ class OscarTSVDataset(Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.corpus_lines = corpus_lines  # number of non-empty lines in input corpus
-        self.corpus_tsvfile = TSVFile(os.path.join(self.root, self.cfg['corpus_file'])) # my_coco.tsv: [img_id, caption]
+        self.corpus_tsvfile = TSVFile(os.path.join(*[self.root, args.img_feature_type, self.cfg['corpus_file']])) # my_coco.tsv: [img_id, caption]
         if 'textb_sample_mode' in kwargs:
             self.textb_sample_mode = kwargs['textb_sample_mode']
         else:
@@ -29,13 +29,13 @@ class OscarTSVDataset(Dataset):
         logging.info('Datasets: {}'.format(','.join(self.datasets_names)))
         self.image_label_path = self.cfg['image_label_path']
         for key, val in self.image_label_path.items():
-            self.image_label_path[key] = os.path.join(self.root, val) # coco
+            self.image_label_path[key] = os.path.join(*[self.root, args.img_feature_type, val]) # coco
         self.image_feature_path = self.cfg['image_feature_path']
         self.image_file_name = 'features.tsv'
         if args.data_dir is not None:
             for key, val in self.image_feature_path.items():
                 if key in self.datasets_names:
-                    self.image_feature_path[key] = os.path.join(args.data_dir, val)
+                    self.image_feature_path[key] = os.path.join(*[args.data_dir, args.img_feature_type, val])
                 else:
                     logging.info("Data {} with path {} is not used in the training.".format(key, val))
         self.encoding = encoding
@@ -187,7 +187,7 @@ class OscarTSVDataset(Dataset):
         if rand_dice>0.5:
             label = 0
             random_img_id = img_id
-        elif rand_dice > self.args.texta_false_prob and t2!="": # wrong qa triplets ???
+        elif rand_dice > self.args.texta_false_prob and t2!="": # sample wrong texta or textb
             random_img_id, t2 = self.get_random_line()
             label=1
         else: # wrong retrieval triplets
@@ -227,10 +227,7 @@ class OscarTSVDataset(Dataset):
         return img_id, t1, t2
     
     def get_random_line(self):
-        """Get random line from another document for nextSentence task.
-
-        Raises:
-            ValueError: _description_
+        """Get random line from another document for nextSentence task
 
         Returns:
             tuple: img_id, random sampled text
@@ -449,7 +446,7 @@ def convert_example_to_features(args, example, max_seq_length, tokenizer, img_fe
         logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
         logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
         logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-        logging.info("LM label: %s " % lm_label_ids)
+        logging.info("LM label: %s " % lm_label_ids) # index of corresponding word
         logging.info("Is next sentence label: %s " % example.is_next)
     
     features=InputFeatures(input_ids=input_ids, input_mask=input_mask, segment_ids=segment_ids, lm_label_ids=lm_label_ids, is_next=example.is_next, img_feat_len=img_feat_len, is_img_match=example.is_img_match)

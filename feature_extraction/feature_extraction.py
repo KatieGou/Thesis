@@ -38,12 +38,14 @@ MetadataCatalog.get("coco").thing_classes = coco_classes
 
 cfg=get_cfg()
 # cfg.merge_from_file("../configs/VG-Detection/faster_rcnn_R_101_C4_caffe.yaml")
-cfg.merge_from_file("../configs/COCO-Detection/faster_rcnn_R_101_C4_3x.yaml")
+# cfg.merge_from_file("../configs/COCO-Detection/faster_rcnn_R_101_C4_3x.yaml") # faster rcnn
+cfg.merge_from_file("../configs/COCO-InstanceSegmentation/mask_rcnn_R_101_C4_3x.yaml")
 cfg.MODEL.RPN.POST_NMS_TOPK_TEST = 300
 cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.6
 cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2
 # cfg.MODEL.WEIGHTS = "http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe.pkl"
-cfg.MODEL.WEIGHTS ="https://dl.fbaipublicfiles.com/detectron2/COCO-Detection/faster_rcnn_R_101_C4_3x/138204752/model_final_298dad.pkl"
+# cfg.MODEL.WEIGHTS ="https://dl.fbaipublicfiles.com/detectron2/COCO-Detection/faster_rcnn_R_101_C4_3x/138204752/model_final_298dad.pkl" # faster rcnn
+cfg.MODEL.WEIGHTS ="https://dl.fbaipublicfiles.com/detectron2/COCO-InstanceSegmentation/mask_rcnn_R_101_C4_3x/138363239/model_final_a2914c.pkl" # mask rcnn
 predictor = DefaultPredictor(cfg)
 
 NUM_OBJECTS = 36
@@ -97,17 +99,6 @@ def extract_features(raw_image):
         roi_features = feature_pooled[ids].detach()
         return raw_height, raw_width, instances, roi_features.detach().cpu().numpy()
 
-def generate_lineidx_file(filein, idxout):
-    idxout_tmp = idxout + '.tmp'
-    with open(filein, 'r') as tsvin, open(idxout_tmp,'w') as tsvout:
-        fsize = os.fstat(tsvin.fileno()).st_size
-        fpos = 0
-        while fpos!=fsize:
-            tsvout.write(str(fpos)+"\n")
-            tsvin.readline()
-            fpos = tsvin.tell()
-    os.rename(idxout_tmp, idxout)
-
 def write_features_tsv(f: str, image_ids: list, features: list, mode: str):
     assert len(image_ids)==len(features)
     rows=list()
@@ -121,9 +112,6 @@ def write_features_tsv(f: str, image_ids: list, features: list, mode: str):
         tsv_writer=csv.writer(out_file, delimiter='\t')
         tsv_writer.writerows(rows)
     
-    lineidx = op.splitext(f)[0] + '.lineidx'
-    generate_lineidx_file(f, lineidx)
-
 def write_predictions_tsv(f: str, image_ids: list, features: list, instances: list, mode: str):
     assert len(image_ids)==len(features)==len(instances)
     rows=list()
@@ -156,9 +144,6 @@ def write_predictions_tsv(f: str, image_ids: list, features: list, instances: li
     with open(f, mode=mode) as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
         tsv_writer.writerows(rows)
-    
-    lineidx = op.splitext(f)[0] + '.lineidx'
-    generate_lineidx_file(f, lineidx)
 
 def write_captions_pt(fin: str, fout: str):
     d=dict()
@@ -198,9 +183,6 @@ def write_coco_tsv(f: str, image_captions: dict, image_captions_sv: dict):
     with open(f, 'w', newline='') as out_file:
         tsv_writer=csv.writer(out_file, delimiter='\t')
         tsv_writer.writerows(rows)
-    
-    lineidx = op.splitext(f)[0] + '.lineidx'
-    generate_lineidx_file(f, lineidx)
 
 def quote_conversion(path):
     with open(path, 'r') as f:  
@@ -245,6 +227,7 @@ def get_img_from_img_infos(image_infos: list, directory: str):
 def main():
     # data_dir='data/images'
     data_dir='data/coco_images/train'
+    # data_dir='data/coco_images/val'
     # data_dir='data/coco_images/test'
     TRAIN_NUM=50000
     VAL_NUM=5000
@@ -252,13 +235,16 @@ def main():
 
     if not op.exists(data_dir):
         train_img_infos=get_images_info(instance_file='coco/coco-2017/instances_train2017.json', num=TRAIN_NUM)
+        # val_img_infos=get_images_info(instance_file='coco/coco-2017/instances_val2017.json', num=VAL_NUM)
         # test_img_infos=get_test_images_info(instance_file='coco/coco-2017/instances_train2017.json', n_train=TRAIN_NUM, n_test=TEST_NUM)
         get_img_from_img_infos(image_infos=train_img_infos, directory=data_dir)
-    with open('image_captions_train2017.json', 'r') as fp:
-        captions = json.load(fp)
-    with open('image_captions_train2017_sv.json', 'r', encoding='utf-8') as fp:
-        captions_sv=json.load(fp)
-    write_coco_tsv(f='my_coco.tsv', image_captions=captions, image_captions_sv=captions_sv)
+        # get_img_from_img_infos(image_infos=val_img_infos, directory=data_dir)
+        # get_img_from_img_infos(image_infos=test_img_infos, directory=data_dir)
+    # with open('image_captions_train2017.json', 'r') as fp:
+    #     captions = json.load(fp)
+    # with open('image_captions_train2017_sv.json', 'r', encoding='utf-8') as fp:
+    #     captions_sv=json.load(fp)
+    # write_coco_tsv(f='my_coco.tsv', image_captions=captions, image_captions_sv=captions_sv)
 
     images=[op.join(data_dir, f) for f in os.listdir(data_dir) if op.isfile(op.join(data_dir, f))]
     # im = cv2.imread("data/images/input.jpg") # dim 3: h, w, color channel
@@ -282,7 +268,7 @@ def main():
 
             write_features_tsv(f='features.tsv', image_ids=image_ids, features=all_full_features, mode=mode)
             write_predictions_tsv(f='predictions.tsv', image_ids=image_ids, features=all_full_features, instances=all_instances, mode=mode)
-            write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids, mode=mode)
+            # write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids, mode=mode)
             print('all_i=', all_i)
 
             image_ids=list()
@@ -303,7 +289,7 @@ def main():
     # the last 500 items
     write_features_tsv(f='features.tsv', image_ids=image_ids, features=all_full_features, mode=mode)
     write_predictions_tsv(f='predictions.tsv', image_ids=image_ids, features=all_full_features, instances=all_instances, mode=mode)
-    write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids, mode=mode)
+    # write_imageid2idx_json(f='imageid2idx.json', image_ids=image_ids, mode=mode)
     
     # write_captions_pt(fin='extracted_features/train/my_coco.tsv', fout='train_captions.pt')
     quote_conversion('predictions.tsv')    

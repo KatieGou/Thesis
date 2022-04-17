@@ -101,7 +101,7 @@ class TensorboardLogger(MetricLogger):
     def __init__(self, log_dir, delimiter='\t'):
         super(TensorboardLogger, self).__init__(delimiter)
         try:
-            from tensorboardX import SummaryWriter
+            from tensorboardX import SummaryWriter # SummaryWriter encapsulates(封装) everything
         except ImportError:
             raise ImportError(
                 'To use tensorboard please install tensorboardX '
@@ -111,7 +111,7 @@ class TensorboardLogger(MetricLogger):
         self.philly_tb_logger_avg = None
         self.philly_tb_logger_med = None
         if is_main_process():
-            self.tb_logger = SummaryWriter(log_dir)
+            self.tb_logger = SummaryWriter(log_dir) # creates writer object. The log will be saved in log_dir
             self.tb_logger_avg = SummaryWriter(os.path.join(log_dir, 'avg'))
             self.tb_logger_med = SummaryWriter(os.path.join(log_dir, 'med'))
         else:

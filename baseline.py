@@ -300,7 +300,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='data/coco', help='data directory')
+    parser.add_argument("--img_feature_type", default='faster_rcnn', type=str, help="faster_rcnn or mask_rcnn")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=False, help="Path to pre-trained model or model type. required for training.")
     parser.add_argument('--output_dir', type=str, default='baseline_output/', help='output directory')
     parser.add_argument('--max_seq_length', type=int, default=2054, help='max sequence length')
@@ -324,6 +324,8 @@ def main():
     parser.add_argument('--save_steps', type=int, default=500, help="Save checkpoint every X steps.")
     parser.add_argument('--eval_model_dir', type=str, default='baseline_output/', help="Teting directory containing the saved model.")
     args=parser.parse_args()
+
+    args.data_dir=os.path.join(*['data', args.img_feature_type, 'coco'])
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
 

@@ -28,9 +28,9 @@ def main():
     parser.add_argument("--bert_model", default=None, type=str, required=True, help="Bert pre-trained model selected in the list: KB/bert-base-swedish-cased, bert-base-multilingual")
     parser.add_argument("--output_dir", default=None, type=str, required=True, help="The output directory where the model checkpoints will be written.")
 
-    parser.add_argument("--max_img_seq_length", default=50, type=int, help="The maximum total input image sequence length.")
+    parser.add_argument("--max_img_seq_length", default=36, type=int, help="The maximum total input image sequence length.")
     parser.add_argument("--img_feature_dim", default=2054, type=int, help="The Image Feature Dimension.")
-    parser.add_argument("--img_feature_type", default='faster_r-cnn', type=str, help="faster_r-cnn or mask_r-cnn")
+    parser.add_argument("--img_feature_type", default='faster_rcnn', type=str, help="faster_rcnn or mask_rcnn")
 
     parser.add_argument("--drop_out", default=0.1, type=float, help="Drop out for BERT.")
     parser.add_argument("--use_b", type=int, default=1, help="use text b")
@@ -308,7 +308,7 @@ def main():
     meters.close()
 
     # plot loss change
-    img_dir='images/'
+    img_dir=os.path.join(args.output_dir, 'images/')
     img_name='training_loss.png'
     if not os.path.exists(img_dir):
         os.mkdir(img_dir)
