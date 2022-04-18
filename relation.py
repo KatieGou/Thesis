@@ -311,7 +311,15 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
                         )
                         log_json.append(epoch_log)
                         with open(args.output_dir + '/eval_logs.json', 'w') as fp:
-                            json.dump(log_json, fp) 
+                            json.dump(log_json, fp)
+                        
+                        if len(log_json)>=2:
+                            is_imporved=log_json[-1]['validation acuracy']>=log_json[-2]['validation acuracy']
+                            if not is_imporved:
+                                args.patience-=1
+                            if args.patience<=0:
+                                logger.info('Early Stopping due to no improvement in validation accuracy')
+                                return global_step, global_loss/global_step
     return global_step, global_loss / global_step
 
 def restore_training_settings(args):
@@ -357,6 +365,7 @@ def main():
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.") # clip the gradients by multiplying the unit vector of the gradients with the threshold
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup.")
     parser.add_argument("--scheduler", default='linear', type=str, help="constant or linear.")
+    parser.add_argument('--patience', type=int, default=10, help='patience for early stopping')
     parser.add_argument("--num_workers", default=6, type=int, help="Workers in dataloader.")
     parser.add_argument("--num_train_epochs", default=10, type=int, help="Total number of training epochs to perform.")
     parser.add_argument("--max_steps", default=-1, type=int, help="Total number of training steps. Override num_train_epochs.")
@@ -370,6 +379,7 @@ def main():
     args.data_dir=os.path.join(*['data', args.img_feature_type, 'coco'])
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
+    assert args.img_feature_type in args.model_name_or_path, "img_feature_type not consistent pre-training settings."
 
     global logger
     logger=logging.getLogger(__name__)
@@ -378,6 +388,7 @@ def main():
         datefmt='%m/%d/%Y %H:%M:%S',
         level=logging.INFO
     )
+    args.output_dir=os.path.join(args.output_dir, os.path.normpath(args.model_name_or_path).split(os.sep)[1])
     mkdir(args.output_dir)
 
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

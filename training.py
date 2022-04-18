@@ -63,6 +63,8 @@ def main():
     
     args = parser.parse_args()
 
+    args.output_dir=os.path.join(args.output_dir, '_'.join([args.model_name_or_path.replace('/', '_'), args.img_feature_type]))
+
     assert args.do_train, "Training is currently the only implemented execution option. Please set do_train."
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:

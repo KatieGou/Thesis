@@ -1,6 +1,6 @@
 training command:
-python -m torch.distributed.launch --nproc_per_node=1 training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 16 --ckpt_period 100 --max_iters 200 --log_period 20 --data_dir data --dataset_file settings.yaml
-python training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output/ --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 16 --ckpt_period 100 --max_iters 500 --log_period 20 --data_dir data --dataset_file settings.yaml
+python -m torch.distributed.launch --nproc_per_node=1 training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 8 --ckpt_period 100 --max_iters 200 --log_period 20 --data_dir data --dataset_file settings.yaml
+python training.py --img_feature_type mask_rcnn --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 8 --ckpt_period 100 --max_iters 500 --log_period 20 --data_dir data --dataset_file settings.yaml
 
 nproc_per_node: num of gpus you have
 cancel: no_cuda, local_rank, gpu_ids in training.py
@@ -26,7 +26,7 @@ relation.py:
 train_captions.pt: {img_id: caption}
 
 relation training command:
-python relation.py --img_feature_type faster_rcnn --model_name_or_path output/checkpoint-0000500 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
+python relation.py --img_feature_type faster_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
 
 relation testing command:
 python relation.py --img_feature_type faster_rcnn --do_test --eval_model_dir relation_output/checkpoint-0-100 --do_lower_case
@@ -44,7 +44,7 @@ make max_seq_length=max_img_seq_len, concatnate img_feature to input_ids
 research question: identify the most performing model (2*2), explore the effect of object tags
 
 baseline training command:
-python baseline.py --img_feature_type faster_rcnn --model_name_or_path output/checkpoint-0020000 --do_train --do_lower_case --evaluate_during_training
+python baseline.py --img_feature_type faster_rcnn --model_name_or_path output/bert-base-multilingual-cased_faster_rcnn/checkpoint-0000500 --do_train --do_lower_case --evaluate_during_training
 
 baseline testing command:
 python baseline.py --img_feature_type faster_rcnn --do_test --eval_model_dir baseline_output/checkpoint-39-15500 --do_lower_case
