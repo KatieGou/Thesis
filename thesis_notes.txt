@@ -44,7 +44,7 @@ make max_seq_length=max_img_seq_len, concatnate img_feature to input_ids
 research question: identify the most performing model (2*2), explore the effect of object tags
 
 baseline training command:
-python baseline.py --img_feature_type faster_rcnn --model_name_or_path output/bert-base-multilingual-cased_faster_rcnn/checkpoint-0000500 --do_train --do_lower_case --evaluate_during_training
+python baseline.py --img_feature_type mask_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --do_lower_case --evaluate_during_training
 
 baseline testing command:
 python baseline.py --img_feature_type faster_rcnn --do_test --eval_model_dir baseline_output/checkpoint-39-15500 --do_lower_case

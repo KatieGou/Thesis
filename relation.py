@@ -12,6 +12,7 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
+from torch.utils.tensorboard import SummaryWriter
 from model.utils.tsv_file import TSVFile
 from model.utils.misc import mkdir, set_seed
 from model.modeling.modeling_bert import ImageBertForSequenceClassification
@@ -230,6 +231,9 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
         val_sampler = SequentialSampler(val_dataset)
         val_dataloader = DataLoader(val_dataset, sampler=val_sampler, batch_size=args.eval_batch_size, num_workers=args.num_workers)
     
+    tb_log_dir=os.path.join(args.output_dir, 'train_logs')
+    writer=SummaryWriter(tb_log_dir)
+    
     no_decay = ['bias', 'LayerNorm.weight']
     grouped_parameters = [
         {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay}, # model.named_parameters(): [name (str), value (tensor)]
@@ -280,11 +284,16 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
             batch_acc = batch_score.item() / (args.train_batch_size * 2) # train_batch_size positive and train_batch_size negative
             global_loss += loss.item()
             global_acc += batch_acc
+
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 global_step += 1
                 optimizer.step() # apply grad of parameters
                 scheduler.step() # update lr
                 model.zero_grad() # clears grad for every parameter
+                
+                writer.add_scalar('global loss', global_loss/global_step, global_step)
+                writer.add_scalar('global acc', global_acc/global_step, global_step)
+                
                 if global_step % args.logging_steps == 0:
                     logger.info(
                         "Epoch: {}, global_step: {}, lr: {:.6f}, batch loss: {:.4f}, global loss: {:.4f}, batch acc: {:.2%}, global acc: {:.2%}".format(
@@ -319,7 +328,9 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
                                 args.patience-=1
                             if args.patience<=0:
                                 logger.info('Early Stopping due to no improvement in validation accuracy')
+                                writer.close()
                                 return global_step, global_loss/global_step
+    writer.close()
     return global_step, global_loss / global_step
 
 def restore_training_settings(args):

@@ -12,6 +12,7 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampl
 import warnings
 warnings.filterwarnings('ignore')
 
+from torch.utils.tensorboard import SummaryWriter
 from model.utils.misc import mkdir
 from model.utils.tsv_file import TSVFile
 
@@ -225,6 +226,9 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
         val_sampler=SequentialSampler(val_dataset)
         val_dataloader=DataLoader(val_dataset, sampler=val_sampler, batch_size=args.eval_batch_size, num_workers=args.num_workers)
     
+    tb_log_dir=os.path.join(args.output_dir, 'train_logs')
+    writer=SummaryWriter(tb_log_dir)
+
     optimizer=torch.optim.AdamW(params=model.parameters(), lr=args.learning_rate)
     scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda epoch: max(1/(1+0.005*epoch), args.min_factor))
 
@@ -261,6 +265,10 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
                 optimizer.step() # apply grad of parameters
                 scheduler.step() # update learning rate
                 model.zero_grad()
+                
+                writer.add_scalar('global loss', global_loss/global_step, global_step)
+                writer.add_scalar('global acc', global_acc/global_step, global_step)
+                
                 if global_step%args.logging_steps==0:
                     logger.info(
                         "Epoch: {}, global_step: {}, lr: {:.6f}, batch loss: {:.4f}, global loss: {:.4f}, batch acc: {:.2%}, global acc: {:.2%}".format(
@@ -295,7 +303,9 @@ def train(args, train_dataset, val_dataset, model, tokenizer, loss_fn):
                                 args.patience-=1
                             if args.patience<=0:
                                 logger.info('Early Stopping due to no improvement in validation accuracy')
+                                writer.close()
                                 return global_step, global_loss/global_step
+    writer.close()
     return global_step, global_loss/global_step
 
 def main():
@@ -338,7 +348,8 @@ def main():
         datefmt='%m/%d/%Y %H:%M:%S',
         level=logging.INFO
     )
-
+    
+    args.output_dir=os.path.join(args.output_dir, os.path.normpath(args.model_name_or_path).split(os.sep)[1])
     mkdir(args.output_dir)
 
     args.device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')

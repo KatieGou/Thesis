@@ -5,17 +5,16 @@ import logging
 import os
 import time
 import torch
-import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
+from torch.utils.tensorboard import SummaryWriter
 from pytorch_transformers import AdamW, WarmupLinearSchedule
 from model.modeling.modeling_bert import BertImgForPreTraining
 from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer # WEIGHTS_NAME: "pytorch_model.bin"
 
 from model.datasets.build import make_data_loader
-from model.utils.misc import mkdir, get_rank, set_seed
-from model.utils.metric_logger import TensorboardLogger
+from model.utils.misc import mkdir, set_seed
 
 logger=logging.getLogger(__name__)
 ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
@@ -110,7 +109,7 @@ def main():
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.bert_model]
     if last_checkpoint_dir is not None:  # recovery
         args.model_name_or_path = last_checkpoint_dir
-        logger.info(" -> Recovering model from {}".format(last_checkpoint_dir))
+        logger.info("Recovering model from {}".format(last_checkpoint_dir))
     
     config = config_class.from_pretrained(args.model_name_or_path)
     config.img_layer_norm_eps = args.img_layer_norm_eps
@@ -124,7 +123,7 @@ def main():
     config.num_contrast_classes = args.num_contrast_classes
 
     # Prepare model
-    model = BertImgForPreTraining.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
+    model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
     for key, val in vars(config).items():
         setattr(args, key, val)
@@ -134,7 +133,7 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     tb_log_dir = os.path.join(args.output_dir, 'train_logs')
-    meters = TensorboardLogger(log_dir=tb_log_dir, delimiter="  ",) # Log to local file system in TensorBoard format.
+    writer=SummaryWriter(log_dir=tb_log_dir)
 
     # Prepare optimizer
     param_optimizer = list(model.named_parameters()) # Returns an iterator over module parameters, yielding both the name of the parameter and the parameter itself
@@ -190,11 +189,11 @@ def main():
         outputs = model(input_ids, segment_ids, input_mask, lm_label_ids, is_next, img_feats=image_features) # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
         loss = loss_weight * outputs[0]
         if args.n_gpu > 1:
-            loss = loss.mean()  # mean() to average on multi-gpu.
+            loss = loss.mean() # mean() to average on multi-gpu.
         if args.gradient_accumulation_steps > 1:
             loss = loss / args.gradient_accumulation_steps
         loss.backward()
-        return loss.item(), input_ids.size(0) # length in dimension 0
+        return loss.item()
 
     if os.path.exists(os.path.join(args.output_dir, 'loss_logs.json')):
         with open(os.path.join(args.output_dir, 'loss_logs.json'), 'r') as f:
@@ -207,25 +206,21 @@ def main():
 
     clock_started = False # Every args.ckpt_period, report train_score and save model
     tr_loss = 0
-    nb_tr_examples, nb_tr_steps = 0, 0
+    nb_tr_steps = 0
     for step, batch in enumerate(train_dataloader, start_iter):
         if not clock_started:
             start_training_time = time.time()
-            end = time.time()
             clock_started = True
         
-        images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1 = data_process(batch)
-        
-        data_time = time.time() - end
-        
-        start1 = time.time()
-        loss1, nb_tr_example1 = forward_backward(images1, input_ids1, input_mask1, segment_ids1, lm_label_ids1, is_next1, loss_weight=1.0)
-        tr_loss += loss1
-        nb_tr_examples += nb_tr_example1
-        compute_time1 = time.time() - start1
-        
+        images, input_ids, input_mask, segment_ids, lm_label_ids, is_next = data_process(batch)
+                
+        loss = forward_backward(images, input_ids, input_mask, segment_ids, lm_label_ids, is_next, loss_weight=1.0)
+        tr_loss += loss
         nb_tr_steps += 1
+        global_loss=tr_loss/nb_tr_steps
         arguments["iteration"] = step + 1
+
+        writer.add_scalar('global loss', global_loss, step+1)
 
         if (step + 1) % args.gradient_accumulation_steps == 0: # do gradient update
             if args.max_grad_norm > 0:
@@ -233,72 +228,40 @@ def main():
             # do the optimization steps
             optimizer.step() # apply grad of parameters
             scheduler.step() # Update learning rate schedule
-            optimizer.zero_grad()
-            
-            # measure elapsed time
-            batch_time = time.time() - end
-            end = time.time()
-            metrics_to_log = {
-                'time_info': {
-                    'compute': batch_time, 
-                    'data': data_time,
-                    'compute1': compute_time1,
-                },
-                'batch_metrics': {'loss': loss1}
-            }
-            params_to_log = {'params': {'bert_lr': optimizer.param_groups[0]["lr"]}}
-            meters.update_metrics(metrics_to_log)
-            meters.update_params(params_to_log)
+            model.zero_grad() # optimizer.zero_grad()
 
             if args.log_period > 0 and (step + 1) % args.log_period == 0:
-                avg_time = meters.meters['time_info']['compute'].global_avg
-                eta_seconds = avg_time * (max_iter - step - 1)
-                eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 logger.info(
-                    meters.delimiter.join(["eta: {eta}", "iter: {iter}", "max mem: {memory:.0f}",]).format(
-                        eta=eta_string, iter=step + 1, memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
-                    ) + "\n    " + meters.get_logs(step + 1)
+                    'Step: {}, lr: {:.7f}, batch_loss: {:.4f}, global_loss: {:.4f}'.format(
+                        step+1, optimizer.param_groups[0]["lr"], loss, global_loss
+                    )
                 )
 
         if (step + 1) == max_iter or (step + 1) % args.ckpt_period == 0:  # Save a trained model
             log_json[step+1] = tr_loss
-            train_metrics_total = torch.Tensor([tr_loss, nb_tr_examples, nb_tr_steps]).to(args.device)
-            # reset metrics
-            tr_loss = 0
-            nb_tr_examples, nb_tr_steps = 0, 0
 
-            if get_rank() == 0:
-                # report metrics
-                train_score_gathered = train_metrics_total[0] / train_metrics_total[2]
-                logger.info("PROGRESS: {}%".format(round(100 * (step + 1) / max_iter, 4)))
-                logger.info("EVALERR: {}%".format(train_score_gathered))
-                meters.update_metrics(
-                    {
-                        'epoch_metrics': {'ex_cnt': train_metrics_total[1],
-                                          'loss': train_score_gathered}
-                    }
-                )
-                with open(os.path.join(args.output_dir, 'loss_logs.json'), 'w') as fp:
-                    json.dump(log_json, fp)
-                
-                # save checkpoint
-                output_dir = os.path.join(args.output_dir,'checkpoint-{:07d}'.format(step + 1))
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                model_to_save = model.module if hasattr(model, 'module') else model
-                optimizer_to_save = {
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict()
-                }
+            logger.info("PROGRESS: {}%".format(round(100 * (step + 1) / max_iter, 4)))
+            with open(os.path.join(args.output_dir, 'loss_logs.json'), 'w') as fp:
+                json.dump(log_json, fp)
+            
+            # save checkpoint
+            output_dir = os.path.join(args.output_dir,'checkpoint-{:07d}'.format(step + 1))
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            model_to_save = model.module if hasattr(model, 'module') else model
+            optimizer_to_save = {
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict()
+            }
 
-                model_to_save.save_pretrained(output_dir)
-                torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                tokenizer.save_pretrained(output_dir)
-                torch.save(optimizer_to_save, os.path.join(output_dir, 'optimizer.pth'))
-                save_file = os.path.join(args.output_dir, "last_checkpoint")
-                with open(save_file, "w") as f:
-                    f.write('checkpoint-{:07d}/pytorch_model.bin'.format(step + 1))
-                logger.info( "Saving model checkpoint {0} to {1}".format(step + 1, output_dir))
+            model_to_save.save_pretrained(output_dir)
+            torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+            tokenizer.save_pretrained(output_dir)
+            torch.save(optimizer_to_save, os.path.join(output_dir, 'optimizer.pth'))
+            save_file = os.path.join(args.output_dir, "last_checkpoint")
+            with open(save_file, "w") as f:
+                f.write('checkpoint-{:07d}/pytorch_model.bin'.format(step + 1))
+            logger.info( "Saving model checkpoint {0} to {1}".format(step + 1, output_dir))
 
     if clock_started:
         total_training_time = time.time() - start_training_time
@@ -306,24 +269,7 @@ def main():
         total_training_time = 0.0
     total_time_str = str(datetime.timedelta(seconds=total_training_time))
     logger.info("Total training time: {} ({:.4f} s / it)".format(total_time_str, total_training_time / max_iter))
-    # close the tb logger
-    meters.close()
-
-    # plot loss change
-    img_dir=os.path.join(args.output_dir, 'images/')
-    img_name='training_loss.png'
-    if not os.path.exists(img_dir):
-        os.mkdir(img_dir)
-    with open(os.path.join(args.output_dir, 'loss_logs.json'), 'r') as fp:
-        d=json.load(fp)
-        steps_lst=list(map(int, d.keys()))
-        loss_lst=list(d.values())
-    plt.plot(steps_lst, loss_lst)
-    plt.xlabel('step')
-    plt.ylabel('loss')
-    plt.title('Minibatch Loss (Masked Token Loss + Contrastive Loss) over training')
-    plt.grid(True)
-    plt.savefig(os.path.join(img_dir, img_name))
+    writer.close()
 
 if __name__ == "__main__":
     main()

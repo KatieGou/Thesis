@@ -1,1 +1,12 @@
-# Thesis
+# Thesis: Image Text Relation Degree Project
+
+Master's Thesis Project at KTH Royal Institute of Technology and InooLabs.
+
+## Introduction
+Image-Text Relation Degree Project aims to predict the relation between an image and a piece of text (whether the text describes the image) in Swedish context. The project used BERT as backbones, and the model was trained on MS-COCO dataset.
+
+The project consists of five modules: a baseline model that used MLP, four models that used combinations of different BERT and image feature extraction algorithms (namely KB_bert-base-swedish-cased, bert-base-multilingual-cased, faster-RCNN and mask-RCNN).
+
+The BERT models can be downloaded from [here](https://huggingface.co/models). The image feature extraction used [this](https://github.com/airsplay/py-bottom-up-attention/tree/master/demo) repository.
+
+## Performance
