@@ -26,7 +26,7 @@ relation.py:
 train_captions.pt: {img_id: caption}
 
 relation training command:
-python relation.py --img_feature_type faster_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
+python relation.py --img_feature_type mask_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
 
 relation testing command:
 python relation.py --img_feature_type faster_rcnn --do_test --eval_model_dir relation_output/checkpoint-0-100 --do_lower_case

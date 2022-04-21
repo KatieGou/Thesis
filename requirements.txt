@@ -4,7 +4,6 @@ numpy==1.19.5
 pycocotools==2.0.4
 pytorch_transformers==1.0.0
 PyYAML==6.0
-tensorboardX==2.5
 torch==1.10.2
 tqdm==4.63.0
 transformers==4.17.0
