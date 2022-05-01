@@ -3,12 +3,12 @@ import logging
 import torch
 from model.utils.misc import get_world_size
 from .oscar_tsv import OscarTSVDataset
-from transformers import BertTokenizer
+from pytorch_transformers import BertTokenizer
+from torch.utils.data import DataLoader
 
-class BatchCollator(object):
+class BatchCollator:
     """
-    From a list of samples from the dataset,
-    returns the images and targets.
+    Receives a list of tuples. From a list of samples from the dataset, returns the images and targets. Create own batch
     """
     def __call__(self, batch):
         return list(zip(*batch))
@@ -24,7 +24,7 @@ def build_dataset(args):
         args=args,
         seq_len=args.max_seq_length,
         tokenizer=tokenizer,
-    )
+    ) # new dictionary initialized with the name=value pairs
 
     # make dataset from factory
     datasets = [OscarTSVDataset(**cfg)]
@@ -40,6 +40,9 @@ def make_data_sampler(dataset, shuffle, distributed):
     return sampler
 
 class IterationBasedBatchSampler(torch.utils.data.sampler.BatchSampler):
+    """
+    sampling from a BatchSampler until a specified number of iterations is reached
+    """    
     def __init__(self, batch_sampler, num_iterations, start_iter=0) -> None:
         self.batch_sampler = batch_sampler
         self.num_iterations = num_iterations
@@ -92,11 +95,11 @@ def make_data_loader(args, is_distributed=False, arguments=None):
 
         batch_sampler = make_batch_data_sampler(sampler, images_per_gpu, num_iters, start_iter)
         num_workers = args.num_workers
-        data_loader = torch.utils.data.DataLoader(
+        data_loader = DataLoader(
             dataset,
             num_workers=num_workers, # how many subprocesses to use for data loading, how may examples printed
-            batch_sampler=batch_sampler, # returns a batch of indices at a time
-            collate_fn=BatchCollator(), # merges a list of samples to form a mini-batch of Tensor(s)
+            batch_sampler=batch_sampler, # returns a batch of indices at a time, Mutually exclusive with 'batch_size', 'shuffle', 'sampler' and 'drop_last'
+            collate_fn=BatchCollator(), # merges a list of samples to form a mini-batch of Tensor(s), same indices are stacked together, easy to process
             pin_memory=True, # If True, the data loader will copy Tensors into CUDA pinned memory before returning them
         )
         data_loaders.append(data_loader)

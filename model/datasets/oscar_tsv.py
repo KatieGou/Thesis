@@ -12,12 +12,14 @@ from model.utils.tsv_file import TSVFile
 from model.utils.misc import load_from_yaml_file
 
 class OscarTSVDataset(Dataset):
+    """Dataset for pretraining
+    """    
     def __init__(self, yaml_file, args=None, tokenizer=None, seq_len=35, encoding="utf-8", corpus_lines=None, **kwargs):
         self.cfg = load_from_yaml_file(yaml_file)
         self.root = os.path.dirname(yaml_file)
         self.vocab = tokenizer.vocab
         self.tokenizer = tokenizer
-        self.seq_len = seq_len
+        self.seq_len = seq_len # max sequence length
         self.corpus_lines = corpus_lines  # number of non-empty lines in input corpus
         self.corpus_tsvfile = TSVFile(os.path.join(*[self.root, args.img_feature_type, self.cfg['corpus_file']])) # my_coco.tsv: [img_id, caption]
         if 'textb_sample_mode' in kwargs:
@@ -44,9 +46,7 @@ class OscarTSVDataset(Dataset):
         self.args = args
 
         self.sample_counter = 0
-        self.line_buffer = None
 
-        self.current_random_doc = 0
         self.num_docs = 0
         self.sample_to_doc = []  # map sample index to doc and line, [{doc_id: , line: }, ...]
         
@@ -57,8 +57,8 @@ class OscarTSVDataset(Dataset):
         self.img_feature_file = None
         self.img_feat_offset_map = None
 
-        self.load_img_labels()
-        self.load_img_tsv_features()
+        self.load_img_labels() # predictions.tsv and image2idx.json
+        self.load_img_tsv_features() # features.tsv
         t_end = time.time()
         logging.info('Info: loading img features using {} secs'.format(t_end - t_start))
 
@@ -72,7 +72,7 @@ class OscarTSVDataset(Dataset):
             img_id=row[0] # should be str
             dataset_name='coco'
             img_feat_offset_map = self.img_feat_offset_map[dataset_name]
-            assert img_id in img_feat_offset_map, 'Image id {} cannot be found in image feature imageid_to_index file!'.format(img_id)
+            assert img_id in img_feat_offset_map, 'Image id {} cannot be found in image feature imageid2index file!'.format(img_id)
 
             # append id info
             doc.append(img_id)
@@ -115,11 +115,9 @@ class OscarTSVDataset(Dataset):
         
         self.num_docs = len(self.all_docs)
         logging.info("Max_tokens: {}".format(max_tokens))
-        
         logging.info("Total docs - Corpus_lines: {}-{}".format(self.num_docs, self.corpus_lines))
     
     def __len__(self):
-        # last line of doc won't be used, because there's no "nextSentence".
         return self.corpus_lines - self.num_docs
     
     def get_img_info(self, idx):
@@ -184,14 +182,14 @@ class OscarTSVDataset(Dataset):
         """        
         img_id, t1, t2=self.get_corpus_line(index)
         rand_dice=random.random()
-        if rand_dice>0.5:
+        if rand_dice>0.5: # right text pair
             label = 0
             random_img_id = img_id
         elif rand_dice > self.args.texta_false_prob and t2!="": # sample wrong texta or textb
-            random_img_id, t2 = self.get_random_line()
+            random_img_id, t2 = self.get_random_line() # random_img_id and t2 corresponds
             label=1
         else: # wrong retrieval triplets
-            random_img_id, t1 = self.get_random_texta()
+            random_img_id, t1 = self.get_random_texta() # random_img_id and t1 corresponds
             label = self.args.num_contrast_classes-1
         
         img_match_label=0
@@ -287,12 +285,9 @@ class OscarTSVDataset(Dataset):
                 t_s = time.time()
                 self.img_label_offset_map[dataset_name] = json.load(open(img_label_offset_map_path))
                 t_e = time.time()
-                logging.info("Load img label offset map: {}, time: {}".format(img_label_offset_map_path, (t_e - t_s)))
+                logging.info("Load image label offset map: {}, time: {}".format(img_label_offset_map_path, (t_e - t_s)))
     
     def load_img_tsv_features(self):
-        self.check_img_feature_file()
-    
-    def check_img_feature_file(self):
         if self.img_feature_file is None:
             self.img_feature_file=dict()
             self.img_feat_offset_map=dict()
@@ -316,7 +311,7 @@ class OscarTSVDataset(Dataset):
         Returns:
             torch.tensor/None: feature of the image
         """        
-        self.check_img_feature_file()
+        self.load_img_tsv_features()
         img_id=image_id
         dataset_name='coco'
         img_feat_offset_map=self.img_feat_offset_map[dataset_name]
@@ -341,7 +336,7 @@ class InputExample:
             tokens_a (list): list of tokens of texta
             tokens_b (list, optional): list of tokens of textb. Defaults to None.
             is_next (int, optional): isNextSentence Label. Defaults to None.
-            lm_labels (_type_, optional): _description_. Defaults to None.
+            lm_labels (list, optional): masked tokens labels. Defaults to None.
             img_id (int, optional): image id. Defaults to None.
             is_img_match (int, optional): img_match_label. Defaults to None.
             img_label (_type_, optional): _description_. Defaults to None.
@@ -368,6 +363,8 @@ class InputFeatures:
         self.is_img_match = is_img_match
 
 def convert_example_to_features(args, example, max_seq_length, tokenizer, img_feat_len):
+    """convert an example to information to feed the model
+    """    
     tokens_a = example.tokens_a
     tokens_b = None
     if example.tokens_b:
@@ -439,7 +436,7 @@ def convert_example_to_features(args, example, max_seq_length, tokenizer, img_fe
     
     lm_label_ids = lm_label_ids + [-1] * args.max_img_seq_length
 
-    if example.guid < 1:
+    if example.guid < 1: # the information is printed num_workers times
         logging.info("*** Example ***")
         logging.info("guid: %s" % example.guid)
         logging.info("tokens: %s" % " ".join([str(x) for x in tokens]))

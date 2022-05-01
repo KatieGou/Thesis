@@ -2,6 +2,7 @@ feature_extraction/*.ipynb
 feature_extraction/coco
 feature_extraction/extracted_features
 feature_extraction/__pycache__
+feature_extraction/dataset1_swedish
 my_code.py
 test.*
 *.ipynb
@@ -12,3 +13,4 @@ images/
 relation_output/
 baseline_output/
 runs/
+pics/

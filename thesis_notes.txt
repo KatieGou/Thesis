@@ -2,11 +2,6 @@ training command:
 python -m torch.distributed.launch --nproc_per_node=1 training.py --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 8 --ckpt_period 100 --max_iters 200 --log_period 20 --data_dir data --dataset_file settings.yaml
 python training.py --img_feature_type mask_rcnn --max_grad_norm 5.0 --gradient_accumulation_steps 1 --use_img_layernorm 1 --output_dir output --bert_model bert --model_name_or_path KB/bert-base-swedish-cased --warmup_steps 0 --do_train --train_batch_size 8 --ckpt_period 100 --max_iters 500 --log_period 20 --data_dir data --dataset_file settings.yaml
 
-nproc_per_node: num of gpus you have
-cancel: no_cuda, local_rank, gpu_ids in training.py
-modify: make_data_loader
-study: non_blocking, meters
-
 visualization in tensorbord:
 tensorboard --logdir=dir
 open another terminal and run:
@@ -14,6 +9,8 @@ ssh -R  80:localhost:6006 localhost.run
 from: http://localhost.run/docs/
 
 modification of packages: 
+Go to ~/.conda/envs/thesis/lib/python3.7/site-packages
+
 1. modeling_bert.py: added model and config
 BERT_PRETRAINED_MODEL_ARCHIVE_MAP={
     'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/pytorch_model.bin"
@@ -21,6 +18,9 @@ BERT_PRETRAINED_MODEL_ARCHIVE_MAP={
 BERT_PRETRAINED_CONFIG_ARCHIVE_MAP={
     'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/config.json"
 }
+2. tokenization_bert.py: added vocab and position_embedding size
+{'KB/bert-base-swedish-cased': "https://s3.amazonaws.com/models.huggingface.co/bert/KB/bert-base-swedish-cased/vocab.txt"}
+{'KB/bert-base-swedish-cased': 512}
 
 relation.py:
 train_captions.pt: {img_id: caption}
@@ -29,22 +29,18 @@ relation training command:
 python relation.py --img_feature_type mask_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --num_train_epochs 1 --max_seq_length 50 --do_lower_case --save_steps 100 --evaluate_during_training
 
 relation testing command:
-python relation.py --img_feature_type faster_rcnn --do_test --eval_model_dir relation_output/checkpoint-0-100 --do_lower_case
-
-modify:
-early stopping
-estimate time
-
-need to cancel: args.num_labels, 
-need to study: img_layer_norm_eps, use_img_layernorm, gradient_accumulation_steps, scheduler, adam, max_grad_norm, warmup_steps
+python relation.py --img_feature_type faster_rcnn --do_test --data_source wild_data --eval_model_dir relation_output/bert-base-multilingual-cased_faster_rcnn/checkpoint-0-900 --do_lower_case
 
 baseline: text: input_ids (max_seq_length, )+ img_feature: (max_img_seq_len, 2054)
 make max_seq_length=max_img_seq_len, concatnate img_feature to input_ids
-
-research question: identify the most performing model (2*2), explore the effect of object tags
 
 baseline training command:
 python baseline.py --img_feature_type mask_rcnn --model_name_or_path output/KB_bert-base-swedish-cased_mask_rcnn/checkpoint-0000500 --do_train --do_lower_case --evaluate_during_training
 
 baseline testing command:
 python baseline.py --img_feature_type faster_rcnn --do_test --eval_model_dir baseline_output/checkpoint-39-15500 --do_lower_case
+
+Notice: hidden_size (768), position_ids, head_mask
+
+Research question
+How Bert can be extended and trained to perform VL tasks in Swedish?

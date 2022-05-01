@@ -3,6 +3,12 @@ import os
 import os.path as op
 
 def generate_lineidx_file(filein, idxout):
+    """generate .lineidx file for easy lookup
+
+    Args:
+        filein (.tsv file): input file
+        idxout (.lineidx file): output file
+    """    
     idxout_tmp = idxout + '.tmp'
     with open(filein, 'r') as tsvin, open(idxout_tmp,'w') as tsvout:
         fsize = os.fstat(tsvin.fileno()).st_size # fileno(): returns the integer file descriptor
@@ -14,10 +20,12 @@ def generate_lineidx_file(filein, idxout):
     os.rename(idxout_tmp, idxout)
 
 
-class TSVFile(object):
+class TSVFile:
+    """handles all .tsv files in the project
+    """    
     def __init__(self, tsv_file, generate_lineidx=True):
         self.tsv_file = tsv_file
-        self.lineidx = op.splitext(tsv_file)[0] + '.lineidx'
+        self.lineidx = op.splitext(tsv_file)[0] + '.lineidx' # stores the satrting position of each line in the tsv file
         self._fp = None
         self._lineidx = None
         # the process always keeps the process which opens the file. 
@@ -41,7 +49,7 @@ class TSVFile(object):
         self._ensure_lineidx_loaded()
         return len(self._lineidx)
 
-    def seek(self, idx):
+    def seek(self, idx): # idx: line number
         self._ensure_tsv_opened()
         self._ensure_lineidx_loaded()
         try:

@@ -38,7 +38,7 @@ def main():
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True, help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
     parser.add_argument("--cache_dir", default="", type=str, help="Where do you want to store the pre-trained models downloaded from s3")
 
-    parser.add_argument("--max_seq_length", default=25, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
+    parser.add_argument("--max_seq_length", default=50, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
     parser.add_argument("--do_train", action='store_true', help="Whether to run training.")
     parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--max_iters", default=200, type=int, help="Maximal number of training iterations.")
@@ -176,6 +176,13 @@ def main():
     def data_process(mini_batch):
         images, targets = mini_batch[0], mini_batch[1] # from __getitem__: img feature, img infos, index
         targets_transposed = list(zip(*targets))
+        '''
+        input_ids: Indices of input sequence tokens in the vocabulary.
+        input_mask: Mask to avoid performing attention on padding token indices. 1: no mask, 0: mask (padded).
+        segment_ids: token_type_ids. Segment token indices to indicate first and second portions of the inputs, 0: sentence A, 1: sentence B.
+        lm_label_ids: indices of masked tokens in the vocabulary (-1 for original tokens)
+        is_next: whether textb (tags) is the next sentence of texta (captions)
+        '''
         input_ids = torch.stack(targets_transposed[0]).to(args.device, non_blocking=True) # non_blocking=True: copy asynchronously to args.device, should be used when pin_memory=True
         input_mask = torch.stack(targets_transposed[1]).to(args.device, non_blocking=True)
         segment_ids = torch.stack(targets_transposed[2]).to(args.device, non_blocking=True)

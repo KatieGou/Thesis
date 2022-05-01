@@ -3,7 +3,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss, MSELoss
-from transformers import BertModel
 from pytorch_transformers.modeling_utils import PreTrainedModel
 from pytorch_transformers.modeling_bert import BertEmbeddings, BertEncoder, BertPooler, BertLayerNorm, BertPreTrainedModel, BertLMPredictionHead, BertConfig, BERT_PRETRAINED_MODEL_ARCHIVE_MAP, load_tf_weights_in_bert
 
@@ -15,8 +14,8 @@ class BertImgModel(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.embeddings = BertEmbeddings(config) # words_embeddings + position_embeddings + token_type_embeddings
-        self.encoder=BertEncoder(config) # output from the encoder
-        self.pooler=BertPooler(config) #taking the hidden state corresponding to the first token.
+        self.encoder=BertEncoder(config) # output from the encoder, takes embeddings and output the hidden states from the last layer
+        self.pooler=BertPooler(config) #taking the hidden state corresponding to the first token, use hanh activation
 
         self.img_dim=config.img_feature_dim
         logger.info('BertImgModel Image Dimension: {}'.format(self.img_dim))
@@ -51,9 +50,6 @@ class BertImgModel(BertPreTrainedModel):
         
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
-        
-        # create a 3D attention mask from a 2D tensor mask.
-        # Sizes are [batch_size, 1, 1, to_seq_length], can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
 
         if attention_mask.dim() == 2:
             extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2) # a dimension of size one inserted at the specified position
@@ -81,7 +77,7 @@ class BertImgModel(BertPreTrainedModel):
         else:
             head_mask = [None] * self.config.num_hidden_layers
         
-        embedding_output = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids) # words_embeddings + position_embeddings + token_type_embeddings
+        embedding_output = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids) # (batch_size, seq_len, hidden_size): words_embeddings + position_embeddings + token_type_embeddings
         
         if img_feats is not None:
             img_embedding_output = self.img_embedding(img_feats)
@@ -89,18 +85,18 @@ class BertImgModel(BertPreTrainedModel):
                 img_embedding_output = self.LayerNorm(img_embedding_output)
             
             # add dropout on image embedding
-            img_embedding_output = self.dropout(img_embedding_output)
+            img_embedding_output = self.dropout(img_embedding_output) # (batch_size, img_seq_length, hidden_size)
             
             # concatenate two embeddings
-            embedding_output = torch.cat((embedding_output, img_embedding_output), 1)
+            embedding_output = torch.cat((embedding_output, img_embedding_output), 1) # (batch_size, seq_len+img_seq_length, hidden_size)
         
-        encoder_outputs = self.encoder(embedding_output, extended_attention_mask, head_mask=head_mask) # (hidden_states, all_hidden_states(optional), all_attentions(optional))
+        encoder_outputs = self.encoder(embedding_output, extended_attention_mask, head_mask=head_mask) # (hidden_states (the last layer), all_hidden_states at each layer (optional), all_attentions at each layer (optional))
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
 
         # add hidden_states and attentions if they are here
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]
-        return outputs # (sequence_output, pooled_output, all_hidden_states(optional), all_attentions(optional))
+        return outputs # (sequence_output (hidden states of the last layer), pooled_output (pooled hidden states of the last layer), all_hidden_states(optional), all_attentions(optional))
 
 def instance_bce_with_logits(logits, labels, reduction='mean'):
     assert logits.dim() == 2
@@ -117,10 +113,7 @@ class ImageBertForSequenceClassification(BertPreTrainedModel):
         self.num_labels = config.num_labels
         self.loss_type = config.loss_type
         self.config = config
-        if config.img_feature_dim > 0:
-            self.bert=BertImgModel(config)
-        else:
-            self.bert=BertModel(config)
+        self.bert=BertImgModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
         if hasattr(config, 'classifier'):
@@ -172,7 +165,7 @@ class ImageBertForSequenceClassification(BertPreTrainedModel):
 class BertPreTrainingHeads(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.predictions = BertLMPredictionHead(config)
+        self.predictions = BertLMPredictionHead(config) # nn.Linear(config.hidden_size, config.vocab_size)
         num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
         self.seq_relationship = nn.Linear(config.hidden_size, num_seq_relations)
 
@@ -213,8 +206,8 @@ class BertImgForPreTraining(PreTrainedModel):
         """
         self._tie_or_clone_weights(self.cls.predictions.decoder, self.bert.embeddings.word_embeddings)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None, next_sentence_label=None, position_ids=None, head_mask=None, img_feats=None):
-        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats) # seqence_output from encoder, pooled sequence_output
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None, next_sentence_label=None, position_ids=None, head_mask=None, img_feats=None): # position_ids and head_mask are not used
+        outputs = self.bert(input_ids, position_ids=position_ids, token_type_ids=token_type_ids, attention_mask=attention_mask, head_mask=head_mask, img_feats=img_feats) # seqence_output from the last layer of encoder, pooled sequence_output from the last layer of encoder
 
         sequence_output, pooled_output = outputs[:2]
         prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output) # (batch_size, vocab_size), (batch_size, num_seq_relations)

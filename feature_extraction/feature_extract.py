@@ -39,7 +39,7 @@ MetadataCatalog.get("coco").thing_classes = coco_classes
 cfg=get_cfg()
 # cfg.merge_from_file("../configs/VG-Detection/faster_rcnn_R_101_C4_caffe.yaml")
 # cfg.merge_from_file("../configs/COCO-Detection/faster_rcnn_R_101_C4_3x.yaml") # faster rcnn
-cfg.merge_from_file("../configs/COCO-InstanceSegmentation/mask_rcnn_R_101_C4_3x.yaml")
+cfg.merge_from_file("../configs/COCO-InstanceSegmentation/mask_rcnn_R_101_C4_3x.yaml") # mask rcnn
 cfg.MODEL.RPN.POST_NMS_TOPK_TEST = 300
 cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.6
 cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2

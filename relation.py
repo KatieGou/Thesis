@@ -350,6 +350,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--img_feature_type", default='faster_rcnn', type=str, help="faster_rcnn or mask_rcnn")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=False, help="Path to pre-trained model or model type. required for training.")
+    parser.add_argument('--data_source', type=str, required=True, help='data source, either coco or wild_data')
     parser.add_argument("--output_dir", default='relation_output/', type=str, required=False, help="The output directory to save checkpoint and test results.")
     parser.add_argument("--loss_type", default='sfmx', type=str, help="Loss function types: support kl, sfmx")
     parser.add_argument("--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name.")
@@ -387,10 +388,15 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help="random seed for initialization.")
     args=parser.parse_args()
 
-    args.data_dir=os.path.join(*['data', args.img_feature_type, 'coco'])
+    args.data_dir=os.path.join(*['data', args.img_feature_type, args.data_source])
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
-    assert args.img_feature_type in args.model_name_or_path, "img_feature_type not consistent pre-training settings."
+    if args.do_train:
+        assert args.img_feature_type in args.model_name_or_path, "img_feature_type not consistent pre-training settings."
+        args.output_dir=os.path.join(args.output_dir, os.path.normpath(args.model_name_or_path).split(os.sep)[1])
+        mkdir(args.output_dir)
+    else:
+        assert args.img_feature_type in args.eval_model_dir, "img_feature_type not consistent pre-trained model directory."
 
     global logger
     logger=logging.getLogger(__name__)
@@ -399,8 +405,6 @@ def main():
         datefmt='%m/%d/%Y %H:%M:%S',
         level=logging.INFO
     )
-    args.output_dir=os.path.join(args.output_dir, os.path.normpath(args.model_name_or_path).split(os.sep)[1])
-    mkdir(args.output_dir)
 
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = torch.cuda.device_count()
