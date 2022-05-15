@@ -3,6 +3,7 @@ feature_extraction/coco
 feature_extraction/extracted_features
 feature_extraction/__pycache__
 feature_extraction/dataset1_swedish
+feature_extraction/detected_objects
 my_code.py
 test.*
 *.ipynb

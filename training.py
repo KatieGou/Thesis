@@ -199,7 +199,7 @@ def main():
             loss = loss.mean() # mean() to average on multi-gpu.
         if args.gradient_accumulation_steps > 1:
             loss = loss / args.gradient_accumulation_steps
-        loss.backward()
+        loss.backward() # computes gradient for every parameter
         return loss.item()
 
     if os.path.exists(os.path.join(args.output_dir, 'loss_logs.json')):

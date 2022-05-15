@@ -198,7 +198,7 @@ class OscarTSVDataset(Dataset):
         
         assert len(t1) > 0
         assert len(t2) > 0 or not self.args.use_b
-        return img_id, t1, t2, label, img_match_label
+        return img_id, t1, t2, label, img_match_label # (img_id, t1) and (img_id, t2) have at least one corresponds
     
     def get_corpus_line(self, item):
         """Get one sample from corpus consisting of a pair of two subsequent lines from the same doc.
@@ -246,9 +246,6 @@ class OscarTSVDataset(Dataset):
     
     def get_random_texta(self):
         """Get random text_a from another document for nextSentence task.
-
-        Raises:
-            ValueError: _description_
 
         Returns:
             tuple: img_id, random sampled texta

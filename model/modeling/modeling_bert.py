@@ -15,7 +15,7 @@ class BertImgModel(BertPreTrainedModel):
         super().__init__(config)
         self.embeddings = BertEmbeddings(config) # words_embeddings + position_embeddings + token_type_embeddings
         self.encoder=BertEncoder(config) # output from the encoder, takes embeddings and output the hidden states from the last layer
-        self.pooler=BertPooler(config) #taking the hidden state corresponding to the first token, use hanh activation
+        self.pooler=BertPooler(config) #taking the hidden state corresponding to the first token, use tanh activation
 
         self.img_dim=config.img_feature_dim
         logger.info('BertImgModel Image Dimension: {}'.format(self.img_dim))
@@ -148,17 +148,8 @@ class ImageBertForSequenceClassification(BertPreTrainedModel):
                 labels = labels.to(torch.float)
                 loss=loss_fct(logits.view(-1), labels.view(-1))
             else:
-                if self.loss_type == 'kl':
-                    loss_fct=torch.nn.KLDivLoss(reduction='batchmean')
-                    log_softmax=torch.nn.LogSoftmax(dim=-1)
-                    reshaped_logits=logits.contiguous().view(-1, 3129) # 3129??
-                    reshaped_logits=log_softmax(reshaped_logits)
-                    loss = loss_fct(reshaped_logits, labels.contiguous())
-                elif self.loss_type == 'bce':
-                    loss = instance_bce_with_logits(logits, labels)
-                else: # retrieval, self.loss_type=sfmx
-                    loss_fct = CrossEntropyLoss()
-                    loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
             outputs=(loss, )+outputs
         return outputs # (loss, logits, all_hidden_states(optional), all_attentions(optional))
 
@@ -215,7 +206,7 @@ class BertImgForPreTraining(PreTrainedModel):
         outputs = (prediction_scores, seq_relationship_score,) + outputs[2:]  # add hidden states and attention if they are here
 
         if masked_lm_labels is not None and next_sentence_label is not None:
-            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            loss_fct = CrossEntropyLoss(ignore_index=-1) # ignore_index: Specifies a target value that is ignored and does not contribute to the input gradient
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), masked_lm_labels.view(-1))
             next_sentence_loss = loss_fct(seq_relationship_score.view(-1, self.num_seq_relations), next_sentence_label.view(-1))
             total_loss = masked_lm_loss + next_sentence_loss
