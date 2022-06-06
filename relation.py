@@ -4,11 +4,13 @@ import base64
 import random
 import json
 import logging
+from selectors import EpollSelector
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm
+from sklearn.metrics import confusion_matrix
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -69,6 +71,7 @@ class RetrievalDataset(Dataset):
             else:
                 od_labels = ' '.join(self.labels[img_key]['class'])
             return od_labels # str separated by space
+        return
     
     def tensorize_example(self, text_a, img_feat, text_b=None, cls_token_segment_id=0, pad_token_segment_id=0, sequence_a_segment_id=0, sequence_b_segment_id=1):
         tokens_a = self.tokenizer.tokenize(text_a)
@@ -152,7 +155,10 @@ class RetrievalDataset(Dataset):
             random_num=random.random()
             if random_num <= 0.5: # positive example
                 label=1
-                return index, tuple(list(example) + [label])
+                if not self.args.output_examples:
+                    return index, tuple(list(example) + [label])
+                else:
+                    return (index, img_key, caption), tuple(list(example) + [label])
             else:
                 label=0
                 neg_img_indexs = list(range(index)) + list(range(index + 1, len(self.img_keys)))
@@ -160,24 +166,28 @@ class RetrievalDataset(Dataset):
                 if random_num <= 0.75: # negative caption
                     caption_neg = self.captions[self.img_keys[img_idx_neg]]
                     example_neg = self.tensorize_example(caption_neg, feature, text_b=od_labels)
-                    return index, tuple(list(example_neg) + [label])
+                    if not self.args.output_examples:
+                        return index, tuple(list(example_neg) + [label])
+                    else:
+                        return (index, img_key, caption_neg), tuple(list(example_neg) + [label])
                 else: # negative image
-                    feature_neg = self.get_image(self.img_keys[img_idx_neg])
+                    img_key_neg=self.img_keys[img_idx_neg]
+                    feature_neg = self.get_image(img_key_neg)
                     od_labels_neg = self.get_od_labels(self.img_keys[img_idx_neg])
                     example_neg = self.tensorize_example(caption, feature_neg, text_b=od_labels_neg)
-                    return index, tuple(list(example_neg) + [label])
+                    if not self.args.output_examples:
+                        return index, tuple(list(example_neg) + [label])
+                    else:
+                        return (index, img_key_neg, caption), tuple(list(example_neg) + [label])
 
 def compute_score_with_logits(logits, labels):
-    if logits.shape[1]>1:
-        logits=torch.max(logits, 1)[1].data # indices of max item along dim 1
-        scores=logits==labels # tensor of bool
-    else:
-        scores = torch.zeros_like(labels).cuda() # labels: tensor
-        for i, (logit, label) in enumerate(zip(logits, labels)):
-            logit_ = torch.sigmoid(logit)
-            if (logit_ >= 0.5 and label == 1) or (logit_ < 0.5 and label == 0):
-                scores[i] = 1
-    return scores
+    scores=logits==labels # tensor of bool
+    c_matrix=confusion_matrix(labels.detach().cpu().numpy(), logits.detach().cpu().numpy(), labels=[0,1])
+    TP=c_matrix[1,1]
+    TN=c_matrix[0,0]
+    FP=c_matrix[0,1]
+    FN=c_matrix[1,0]
+    return scores, TP, TN, FP, FN
 
 def save_checkpoint(model, tokenizer, args, epoch, global_step):
     checkpoint_dir = os.path.join(args.output_dir, 'checkpoint-{}-{}'.format(epoch, global_step))
@@ -194,8 +204,11 @@ def save_checkpoint(model, tokenizer, args, epoch, global_step):
 def evaluate(args, model, val_dataloader, length: int): # for validation
     model.eval()
     softmax = nn.Softmax(dim=1)
-    total_sores=0.0
-    for _, batch in tqdm(val_dataloader): # len(indexs)=batch size, seqeuential
+    total_scores=0.0
+    total_TP, total_TN, total_FP, total_FN=0,0,0,0
+    for idx, batch in tqdm(val_dataloader): # len(indexs)=batch size, seqeuential
+        if args.output_examples:
+            _, img_key, caption=idx
         batch = tuple(t.to(args.device) for t in batch)
         labels=batch[4]
         with torch.no_grad(): # disable gradient calculation for inference
@@ -211,9 +224,21 @@ def evaluate(args, model, val_dataloader, length: int): # for validation
                 result = softmax(logits)
             else:
                 result = logits
-            scores=compute_score_with_logits(result, labels)
-            total_sores+=scores.sum().item()
-    return total_sores/length # accuracy
+            result=torch.max(result, 1)[1].data # indices of max item along dim 1
+            if args.output_examples:
+                for i in range(len(result)):
+                    if result[i]!=labels[i]:
+                        print('Misclassified examples: real label: {}, img_key: {}, caption: {}, output label: {}'.format(labels[i], img_key[i], caption[i], result[i]))
+
+            scores, TP, TN, FP, FN=compute_score_with_logits(result, labels)
+            total_scores+=scores.sum().item()
+            total_TP+=TP
+            total_TN+=TN
+            total_FP+=FP
+            total_FN+=FN
+    precision=total_TP/(total_TP+total_FP)
+    recall=total_TP/(total_TP+total_FN)
+    return total_scores/length, precision, recall # accuracy, precision, recall
 
 def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify to restore training process
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu) # args.per_gpu_train_batch_size
@@ -224,7 +249,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
         t_total = args.max_steps
         args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
     else:
-        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs # 50000/args.train_batch_size*30=50000/8*30=187500
+        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs # 50000/args.train_batch_size*num_train_epochs
     
     if val_dataset is not None:
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
@@ -274,13 +299,14 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
             }
             outputs = model(**inputs) # (loss, logits, all_hidden_states(optional), all_attentions(optional))
             loss, logits = outputs[:2]
+            logits=torch.max(logits, 1)[1].data # indices of max item along dim 1
             if args.n_gpu > 1: 
                 loss = loss.mean()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps # normalize loss
             loss.backward() # computes gradient for every parameter
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm) # if norm exceeds max_norm, the values in the vector will be rescaled so the norm of the vector equals max_norm
-            batch_score = compute_score_with_logits(logits, inputs['labels']).sum() # 0 or 1
+            batch_score= compute_score_with_logits(logits, inputs['labels'])[0].sum() # 0 or 1
             batch_acc = batch_score.item() / (args.train_batch_size * 2) # train_batch_size positive and train_batch_size negative
             global_loss += loss.item()
             global_acc += batch_acc
@@ -307,15 +333,15 @@ def train(args, train_dataset, val_dataset, model, tokenizer): # need to modify 
                         logger.info("Perform evaluation at step: %d" % (global_step))
                         logger.info("Num validation examples = %d", len(val_dataset))
                         logger.info("Evaluation batch size = {}".format(args.eval_batch_size))
-                        val_acc = evaluate(args, model, val_dataloader, len(val_dataset))
+                        val_acc, val_precision, val_recall = evaluate(args, model, val_dataloader, len(val_dataset))
                         epoch_log = {
                             'epoch': epoch, 
                             'global_step': global_step, 
                             'validation acuracy': val_acc
                         }
                         logger.info(
-                            'Validation Result: epoch: {}, global_step: {}, validation accuracy: {:.2%}'.format(
-                                epoch, global_step, val_acc
+                            'Validation Result: epoch: {}, global_step: {}, validation accuracy: {:.2%}, validation precision: {:.2f}, validation recall: {:.2f}'.format(
+                                epoch, global_step, val_acc, val_precision, val_recall
                             )
                         )
                         log_json.append(epoch_log)
@@ -358,7 +384,7 @@ def main():
     parser.add_argument("--max_seq_length", default=50, type=int, help="The maximum total input sequence length after tokenization.")
     parser.add_argument("--do_train", action='store_true', help="Whether to run training.")
     parser.add_argument("--do_test", action='store_true', help="Whether to run inference.")
-    parser.add_argument("--add_od_labels", default=True, action='store_true', help="Whether to add object detection labels or not.")
+    parser.add_argument("--add_od_labels", default=False, action='store_true', help="Whether to add object detection labels or not.")
     parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
     parser.add_argument("--drop_out", default=0.1, type=float, help="Drop out in BERT.")
     parser.add_argument("--max_img_seq_length", default=36, type=int, help="The maximum total input image sequence length.")
@@ -386,17 +412,15 @@ def main():
     parser.add_argument("--evaluate_during_training", action='store_true', help="Run evaluation during training at each save_steps.")
     parser.add_argument("--eval_model_dir", type=str, default='', help="Model directory for evaluation.")
     parser.add_argument('--seed', type=int, default=42, help="random seed for initialization.")
+    parser.add_argument('--output_examples', default=False, action='store_true', help="Whether to output misclassified examples.")
     args=parser.parse_args()
 
-    args.data_dir=os.path.join(*['data', args.img_feature_type, args.data_source])
+    args.data_dir=os.path.join(*['data', args.data_source])
 
     assert (args.do_train)^(args.do_test), "do_train and do_test must be set exclusively."
     if args.do_train:
-        assert args.img_feature_type in args.model_name_or_path, "img_feature_type not consistent pre-training settings."
         args.output_dir=os.path.join(args.output_dir, os.path.normpath(args.model_name_or_path).split(os.sep)[1])
         mkdir(args.output_dir)
-    else:
-        assert args.img_feature_type in args.eval_model_dir, "img_feature_type not consistent pre-trained model directory."
 
     global logger
     logger=logging.getLogger(__name__)
@@ -446,8 +470,8 @@ def main():
         args.test_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
         test_sampler = SequentialSampler(test_dataset)
         test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.test_batch_size, num_workers=args.num_workers)
-        test_acc = evaluate(args, model, test_dataloader, len(test_dataset))
-        logger.info('Testing Accuracy: {:.2%}'.format(test_acc))
+        test_acc, test_precision, test_recall= evaluate(args, model, test_dataloader, len(test_dataset))
+        logger.info('Testing Accuracy: {:.2%}, Precision: {:.2f}, Recall: {:.2f}'.format(test_acc, test_precision, test_recall))
         logger.info('Testing done')
 
 if __name__ == "__main__":

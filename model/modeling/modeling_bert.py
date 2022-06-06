@@ -91,8 +91,9 @@ class BertImgModel(BertPreTrainedModel):
             embedding_output = torch.cat((embedding_output, img_embedding_output), 1) # (batch_size, seq_len+img_seq_length, hidden_size)
         
         encoder_outputs = self.encoder(embedding_output, extended_attention_mask, head_mask=head_mask) # (hidden_states (the last layer), all_hidden_states at each layer (optional), all_attentions at each layer (optional))
-        sequence_output = encoder_outputs[0]
-        pooled_output = self.pooler(sequence_output)
+        sequence_output = encoder_outputs[0] # (batch_size, seq_len+img_sqe_len, hidden_size)
+        # "pool" the model by simply taking the hidden state corresponding to the first token.
+        pooled_output = self.pooler(sequence_output) # (batch_size, hidden_size)
 
         # add hidden_states and attentions if they are here
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]
@@ -177,6 +178,7 @@ class BertImgForPreTraining(PreTrainedModel):
         self.cls = BertPreTrainingHeads(config)
         self.num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
 
+        self.add_od_labels=config.add_od_labels
         self.apply(self.init_weights) # initialize weights
         self.tie_weights()
 
@@ -209,7 +211,10 @@ class BertImgForPreTraining(PreTrainedModel):
             loss_fct = CrossEntropyLoss(ignore_index=-1) # ignore_index: Specifies a target value that is ignored and does not contribute to the input gradient
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), masked_lm_labels.view(-1))
             next_sentence_loss = loss_fct(seq_relationship_score.view(-1, self.num_seq_relations), next_sentence_label.view(-1))
-            total_loss = masked_lm_loss + next_sentence_loss
+            if self.add_od_labels:
+                total_loss = masked_lm_loss + next_sentence_loss
+            else:
+                total_loss = masked_lm_loss
             outputs = (total_loss,) + outputs + (masked_lm_loss,)
 
         return outputs  # (loss), prediction_scores, seq_relationship_score, (hidden_states (opt)), (attentions (opt)), masked_lm_loss

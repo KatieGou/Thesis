@@ -1,32 +1,79 @@
-import argparse
 import datetime
 import json
 import logging
 import os
 import time
+import argparse
 import torch
+import torch.nn as nn
+from torch.nn import CrossEntropyLoss
 import warnings
 warnings.filterwarnings('ignore')
 
 from torch.utils.tensorboard import SummaryWriter
-from pytorch_transformers import AdamW, WarmupLinearSchedule
-from model.modeling.modeling_bert import BertImgForPreTraining
-from pytorch_transformers import WEIGHTS_NAME, BertConfig, BertTokenizer # WEIGHTS_NAME: "pytorch_model.bin"
-
+from model.utils.misc import mkdir
 from model.datasets.build import make_data_loader
-from model.utils.misc import mkdir, set_seed
+from model.modeling.modeling_bert import BertPreTrainingHeads
 
-logger=logging.getLogger(__name__)
-ALL_MODELS=sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig,)), ())
-MODEL_CLASSES = {'bert': (BertConfig, BertImgForPreTraining, BertTokenizer),}
+from pytorch_transformers import BertConfig, AdamW, WarmupLinearSchedule
+
+class SimpleLSTM(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.embedding=nn.Embedding(config.vocab_size, config.hidden_size)
+        self.img_dim=config.img_feature_dim
+        self.img_embedding = nn.Linear(self.img_dim, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.activation = nn.Tanh()
+        self.lstm=nn.LSTM(config.hidden_size, int(config.hidden_size/2), num_layers=12, bidirectional=True, batch_first=True)
+        
+    def forward(self, input_ids, img_feats=None):
+        embedding_output=self.embedding(input_ids)
+        if img_feats is not None:
+            img_embedding_output = self.img_embedding(img_feats)
+            img_embedding_output = self.dropout(img_embedding_output) # (batch_size, img_seq_length, hidden_size)
+            embedding_output = torch.cat((embedding_output, img_embedding_output), 1) # (batch_size, seq_len+img_seq_length, hidden_size)
+        lstm_outputs=self.lstm(embedding_output) # tuple of (output, hidden)
+        sequence_output, _=lstm_outputs # (batch_size, seq_len, hidden_size)
+        first_token_tensor=sequence_output[:,0,:]
+        pooled_output=self.dense(first_token_tensor)
+        pooled_output=self.activation(pooled_output) # (batch_size, hidden_size)
+        outputs=(sequence_output, pooled_output)
+        return outputs # sequence_output, pooled_output
+
+class SimpleLSTMPretraining(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.lstm=SimpleLSTM(config)
+        self.cls=BertPreTrainingHeads(config)
+        self.num_seq_relations = config.num_contrast_classes if hasattr(config, "num_contrast_classes") else 2
+        self.add_od_labels=config.add_od_labels
+        self.config=config
+    
+    def forward(self, input_ids, masked_lm_labels=None, next_sentence_label=None, img_feats=None):
+        outputs=self.lstm(input_ids, img_feats)
+        sequence_output, pooled_output=outputs
+        prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output) # (batch_size, vocab_size), (batch_size, num_seq_relations)
+        if masked_lm_labels is not None and next_sentence_label is not None:
+            loss_fct = CrossEntropyLoss(ignore_index=-1) # ignore_index: Specifies a target value that is ignored and does not contribute to the input gradient
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), masked_lm_labels.view(-1))
+            next_sentence_loss = loss_fct(seq_relationship_score.view(-1, self.num_seq_relations), next_sentence_label.view(-1))
+            if self.add_od_labels:
+                total_loss = masked_lm_loss + next_sentence_loss
+            else:
+                total_loss = masked_lm_loss
+            outputs = (total_loss,) + outputs
+            return outputs
 
 def main():
+    logger=logging.getLogger(__name__)
+
     parser=argparse.ArgumentParser()
     parser.add_argument("--data_dir", default=None, type=str, required=True, help="The input data dir containing the .yaml files for the task.")
     parser.add_argument("--dataset_file", default=None, type=str, required=True, help="The training dataset yaml file.")
-    parser.add_argument("--bert_model", default=None, type=str, required=True, help="Bert pre-trained model selected in the list: KB/bert-base-swedish-cased, bert-base-multilingual-cased")
     parser.add_argument("--output_dir", default=None, type=str, required=True, help="The output directory where the model checkpoints will be written.")
-    parser.add_argument("--add_od_labels", default=False, action='store_true', help="Whether to add object detection labels or not.")
+    parser.add_argument("--add_od_labels", default=True, action='store_true', help="Whether to add object detection labels or not.")
 
     parser.add_argument("--max_img_seq_length", default=36, type=int, help="The maximum total input image sequence length.")
     parser.add_argument("--img_feature_dim", default=2054, type=int, help="The Image Feature Dimension.")
@@ -36,7 +83,7 @@ def main():
     parser.add_argument("--use_b", type=int, default=1, help="use text b")
     parser.add_argument("--textb_sample_mode", type=int, default=1, help="0: sample from both texta&textb, 1: sample from textb, 2: sample from QA answers")
     parser.add_argument("--texta_false_prob", type=float, default=0.0, help="the probality that we sample wrong texta, should in [0.0, 0.5]")
-    parser.add_argument("--model_name_or_path", default=None, type=str, required=True, help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
+    parser.add_argument("--model_name_or_path", default=None, type=str, required=True, help="Path to pre-trained model or model type. required for training.")
     parser.add_argument("--cache_dir", default="", type=str, help="Where do you want to store the pre-trained models downloaded from s3")
 
     parser.add_argument("--max_seq_length", default=50, type=int, help="The maximum total input sequence length after WordPiece tokenization. Sequences longer than this will be truncated, and sequences shorter than this will be padded.")
@@ -57,24 +104,21 @@ def main():
 
     parser.add_argument("--mask_loss_for_unmatched", type=int, default=1, help="masked language model loss for unmatched triplets")
     parser.add_argument("--use_gtlabels", type=int, default=1, help="use groundtruth labels for text b or not")
-
+    
     parser.add_argument('--ckpt_period', type=int, default=100, help="Period for saving checkpoint")
     parser.add_argument('--log_period', type=int, default=20, help="Period for saving logging info")
+
+    args=parser.parse_args()
+
+    args.output_dir=os.path.join(args.output_dir, '_'.join(['lstm', args.model_name_or_path.replace('/', '_')]))   
     
-    args = parser.parse_args()
-
-    if args.add_od_labels:
-        args.output_dir=os.path.join(args.output_dir, '_'.join([args.model_name_or_path.replace('/', '_'), 'od_labels']))
-    else:
-        args.output_dir=os.path.join(args.output_dir, '_'.join([args.model_name_or_path.replace('/', '_'), 'no_od_labels']))
-
     assert args.do_train, "Training is currently the only implemented execution option. Please set do_train."
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
         logger.info("Output Directory Exists.")
-
-    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    args.n_gpu = torch.cuda.device_count()
+    
+    args.device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args.n_gpu=torch.cuda.device_count()
 
     # Setup logging
     logging.basicConfig(
@@ -88,34 +132,12 @@ def main():
     )
 
     assert args.gradient_accumulation_steps>=1, "Gradient_accumulation_steps should be >= 1"
-    
-    # set_seed(seed=args.seed, n_gpu=args.n_gpu)
-    
+
     if not os.path.exists(args.output_dir):
         mkdir(args.output_dir)
     
-    last_checkpoint_dir = None
-    arguments = {"iteration": 0}
-    if os.path.exists(args.output_dir):
-        save_file = os.path.join(args.output_dir, "last_checkpoint")
-        try:
-            with open(save_file, "r") as f:
-                last_saved = f.read()
-                last_saved = last_saved.strip()
-        except IOError:# if file doesn't exist, maybe because it has just been deleted by a separate process
-            last_saved = ""
-        if last_saved:
-            folder_name = os.path.splitext(last_saved.split('/')[0])[0] # in the form of checkpoint-00001 or checkpoint-00001/pytorch_model.bin
-            last_checkpoint_dir = os.path.join(args.output_dir, folder_name)
-            arguments["iteration"] = int(folder_name.split('-')[-1])
-            assert os.path.isfile(os.path.join(last_checkpoint_dir, WEIGHTS_NAME)), "Last_checkpoint detected, but file not found!"
-    
-    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.bert_model]
-    if last_checkpoint_dir is not None:  # recovery
-        args.model_name_or_path = last_checkpoint_dir
-        logger.info("Recovering model from {}".format(last_checkpoint_dir))
-    
-    config = config_class.from_pretrained(args.model_name_or_path)
+    config_class=BertConfig
+    config=config_class.from_pretrained(args.model_name_or_path)
     config.img_layer_norm_eps = args.img_layer_norm_eps
     config.use_img_layernorm = args.use_img_layernorm
 
@@ -126,10 +148,10 @@ def main():
     args.num_contrast_classes = 2
     config.num_contrast_classes = args.num_contrast_classes
     config.add_od_labels = args.add_od_labels
+    config.max_img_seq_length=args.max_img_seq_length
+    config.max_seq_length=args.max_seq_length
 
-    # Prepare model
-    model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
-
+    model=SimpleLSTMPretraining(config)
     for key, val in vars(config).items():
         setattr(args, key, val)
     
@@ -138,7 +160,7 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     tb_log_dir = os.path.join(args.output_dir, 'train_logs')
-    writer=SummaryWriter(log_dir=tb_log_dir)
+    writer=SummaryWriter(tb_log_dir)
 
     # Prepare optimizer
     param_optimizer = list(model.named_parameters()) # Returns an iterator over module parameters, yielding both the name of the parameter and the parameter itself
@@ -147,29 +169,22 @@ def main():
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=args.max_iters) # linearly increases learning rate from 0 to args.learning_rate over args.warmup_steps, linealy dcreases from args.learning_rate to 0 over args.max_iters-args.warmup_steps
 
-    if arguments['iteration'] > 0 and os.path.isfile(os.path.join(last_checkpoint_dir, 'optimizer.pth')): # recovery
-        logger.info("Load BERT optimizer from {}".format(last_checkpoint_dir))
-        optimizer_to_load = torch.load(os.path.join(last_checkpoint_dir, 'optimizer.pth'), map_location=torch.device("cpu"))
-        optimizer.load_state_dict(optimizer_to_load.pop("optimizer"))
-        scheduler.load_state_dict(optimizer_to_load.pop("scheduler"))
+    if args.n_gpu>1:
+        model=torch.nn.DataParallel(model)
     
-    if args.n_gpu > 1:
-        model = torch.nn.DataParallel(model)
-    
-    train_dataloaders = make_data_loader(args, is_distributed=False, arguments=arguments)
+    train_dataloaders=make_data_loader(args, is_distributed=False)
 
     if isinstance(train_dataloaders, list):
-        train_dataloader = train_dataloaders[0]
+        train_dataloader=train_dataloaders[0]
     else:
-        train_dataloader = train_dataloaders
+        train_dataloader=train_dataloaders
     tokenizer = train_dataloader.dataset.tokenizer
 
-    max_iter = len(train_dataloader) # train_dataloader depends on args.max_iters, so here max_iter=args.max_iters
-    start_iter = arguments["iteration"]
+    max_iter=len(train_dataloader)
+    start_iter=0
     logger.info("***** Running training *****")
     logger.info("  Num examples = {}".format(len(train_dataloader.dataset))) # train_dataloader.dataset=OscarTSVDataset
     logger.info("  Instantaneous batch size = %d", args.train_batch_size // args.gradient_accumulation_steps)
@@ -195,9 +210,9 @@ def main():
         is_img_match = torch.stack(targets_transposed[5]).to(args.device, non_blocking=True)
         return images, input_ids, input_mask, segment_ids, lm_label_ids, is_next
     
-    def forward_backward(images, input_ids, input_mask, segment_ids, lm_label_ids, is_next, loss_weight=1.0): # feature as input
+    def forward_backward(images, input_ids, segment_ids, lm_label_ids, is_next, loss_weight=1.0): # feature as input
         image_features = torch.stack(images).to(args.device, non_blocking=True)
-        outputs = model(input_ids, segment_ids, input_mask, lm_label_ids, is_next, img_feats=image_features) # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
+        outputs = model(input_ids, masked_lm_labels=lm_label_ids, next_sentence_label=is_next, img_feats=image_features) # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
         loss = loss_weight * outputs[0]
         if args.n_gpu > 1:
             loss = loss.mean() # mean() to average on multi-gpu.
@@ -205,7 +220,7 @@ def main():
             loss = loss / args.gradient_accumulation_steps
         loss.backward() # computes gradient for every parameter
         return loss.item()
-
+    
     if os.path.exists(os.path.join(args.output_dir, 'loss_logs.json')):
         with open(os.path.join(args.output_dir, 'loss_logs.json'), 'r') as f:
             log_json = json.load(f)
@@ -224,16 +239,15 @@ def main():
             clock_started = True
         
         images, input_ids, input_mask, segment_ids, lm_label_ids, is_next = data_process(batch)
-                
-        loss = forward_backward(images, input_ids, input_mask, segment_ids, lm_label_ids, is_next, loss_weight=1.0)
+
+        loss = forward_backward(images, input_ids, segment_ids, lm_label_ids, is_next, loss_weight=1.0)
         tr_loss += loss
         nb_tr_steps += 1
         global_loss=tr_loss/nb_tr_steps
-        arguments["iteration"] = step + 1
 
         writer.add_scalar('global loss', global_loss, step+1)
 
-        if (step + 1) % args.gradient_accumulation_steps == 0: # do gradient update
+        if (step+1) % args.gradient_accumulation_steps == 0:
             if args.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm) # Clips gradient norm of an iterable of parameters
             # do the optimization steps
@@ -247,10 +261,9 @@ def main():
                         step+1, optimizer.param_groups[0]["lr"], loss, global_loss
                     )
                 )
-
+        
         if (step + 1) == max_iter or (step + 1) % args.ckpt_period == 0:  # Save a trained model
             log_json[step+1] = tr_loss
-
             logger.info("PROGRESS: {}%".format(round(100 * (step + 1) / max_iter, 4)))
             with open(os.path.join(args.output_dir, 'loss_logs.json'), 'w') as fp:
                 json.dump(log_json, fp)
@@ -260,20 +273,11 @@ def main():
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
             model_to_save = model.module if hasattr(model, 'module') else model
-            optimizer_to_save = {
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict()
-            }
-
-            model_to_save.save_pretrained(output_dir)
+            torch.save(model_to_save.state_dict(), os.path.join(output_dir, "pytorch_model.bin"))
             torch.save(args, os.path.join(output_dir, 'training_args.bin'))
             tokenizer.save_pretrained(output_dir)
-            torch.save(optimizer_to_save, os.path.join(output_dir, 'optimizer.pth'))
-            save_file = os.path.join(args.output_dir, "last_checkpoint")
-            with open(save_file, "w") as f:
-                f.write('checkpoint-{:07d}/pytorch_model.bin'.format(step + 1))
             logger.info( "Saving model checkpoint {0} to {1}".format(step + 1, output_dir))
-
+    
     if clock_started:
         total_training_time = time.time() - start_training_time
     else:

@@ -21,7 +21,7 @@ class OscarTSVDataset(Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len # max sequence length
         self.corpus_lines = corpus_lines  # number of non-empty lines in input corpus
-        self.corpus_tsvfile = TSVFile(os.path.join(*[self.root, args.img_feature_type, self.cfg['corpus_file']])) # my_coco.tsv: [img_id, caption]
+        self.corpus_tsvfile = TSVFile(os.path.join(*[self.root, self.cfg['corpus_file']])) # my_coco.tsv: [img_id, caption]
         if 'textb_sample_mode' in kwargs:
             self.textb_sample_mode = kwargs['textb_sample_mode']
         else:
@@ -31,13 +31,13 @@ class OscarTSVDataset(Dataset):
         logging.info('Datasets: {}'.format(','.join(self.datasets_names)))
         self.image_label_path = self.cfg['image_label_path']
         for key, val in self.image_label_path.items():
-            self.image_label_path[key] = os.path.join(*[self.root, args.img_feature_type, val]) # coco
+            self.image_label_path[key] = os.path.join(*[self.root, val]) # coco
         self.image_feature_path = self.cfg['image_feature_path']
         self.image_file_name = 'features.tsv'
         if args.data_dir is not None:
             for key, val in self.image_feature_path.items():
                 if key in self.datasets_names:
-                    self.image_feature_path[key] = os.path.join(*[args.data_dir, args.img_feature_type, val])
+                    self.image_feature_path[key] = os.path.join(*[args.data_dir, val])
                 else:
                     logging.info("Data {} with path {} is not used in the training.".format(key, val))
         self.encoding = encoding
